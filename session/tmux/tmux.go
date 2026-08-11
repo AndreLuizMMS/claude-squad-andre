@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -23,6 +24,42 @@ const ProgramClaude = "claude"
 
 const ProgramAider = "aider"
 const ProgramGemini = "gemini"
+
+// agentMarkers are the strings an agent draws in its own interface. busy is
+// what it shows while a turn is in flight; prompt is what it shows while it
+// waits on a yes/no answer. The busy marker is matched lowercased, so agents
+// that capitalize it differently between versions still match.
+var agentMarkers = map[string]struct{ prompt, busy string }{
+	ProgramClaude: {"No, and tell Claude what to do differently", "esc to interrupt"},
+	ProgramAider:  {"(Y)es/(N)o/(D)on't ask again", ""},
+	ProgramGemini: {"Yes, allow once", "esc to cancel"},
+}
+
+// markers returns the markers of the agent running in this session. The
+// configured program is usually a resolved path ("/home/me/.local/bin/claude")
+// and may carry flags, so the lookup is done on the command's base name — a
+// path match would silently fall through to no markers at all, which is what
+// made a blinking cursor look like an agent starting and stopping work.
+func (t *TmuxSession) markers() (m struct{ prompt, busy string }) {
+	fields := strings.Fields(t.program)
+	if len(fields) == 0 {
+		return m
+	}
+	name := filepath.Base(fields[0])
+	for program, markers := range agentMarkers {
+		if strings.HasPrefix(name, program) {
+			return markers
+		}
+	}
+	return m
+}
+
+// HasBusyMarker reports whether this agent announces its own working state. For
+// the ones that do, that announcement is the only signal worth trusting; for
+// the rest, changes in the pane are all there is to go on.
+func (t *TmuxSession) HasBusyMarker() bool {
+	return t.markers().busy != ""
+}
 
 // TmuxSession represents a managed tmux session
 type TmuxSession struct {
@@ -268,18 +305,12 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool, busy bool) {
 		return false, false, false
 	}
 
-	// Only set hasPrompt for claude and aider. Use these strings to check for a prompt.
-	// The busy marker is what the agent itself draws while a turn is in flight,
-	// which is far more reliable than watching the pane for changes: an agent
-	// that thinks quietly for a second is still working.
-	if t.program == ProgramClaude {
-		hasPrompt = strings.Contains(content, "No, and tell Claude what to do differently")
-		busy = strings.Contains(content, "esc to interrupt")
-	} else if strings.HasPrefix(t.program, ProgramAider) {
-		hasPrompt = strings.Contains(content, "(Y)es/(N)o/(D)on't ask again")
-	} else if strings.HasPrefix(t.program, ProgramGemini) {
-		hasPrompt = strings.Contains(content, "Yes, allow once")
-		busy = strings.Contains(content, "esc to cancel")
+	m := t.markers()
+	if m.prompt != "" {
+		hasPrompt = strings.Contains(content, m.prompt)
+	}
+	if m.busy != "" {
+		busy = strings.Contains(strings.ToLower(content), m.busy)
 	}
 
 	if !bytes.Equal(t.monitor.hash(content), t.monitor.prevOutputHash) {

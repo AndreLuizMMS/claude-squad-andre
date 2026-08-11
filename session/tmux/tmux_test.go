@@ -86,3 +86,28 @@ func TestStartTmuxSession(t *testing.T) {
 	_, err = ptyFactory.files[1].Stat()
 	require.NoError(t, err)
 }
+
+func TestMarkersMatchTheAgentBehindTheProgramPath(t *testing.T) {
+	// The configured program is whatever "which claude" resolved to, so a raw
+	// equality check against "claude" would find no markers at all and leave
+	// the session judged only by its screen flickering.
+	for _, program := range []string{
+		"claude",
+		"/home/me/.local/bin/claude",
+		"/usr/bin/claude --dangerously-skip-permissions",
+	} {
+		s := newTmuxSession("t", program, nil, nil)
+		if !s.HasBusyMarker() {
+			t.Errorf("program %q should be recognized as claude", program)
+		}
+		if s.markers().prompt == "" {
+			t.Errorf("program %q should have a prompt marker", program)
+		}
+	}
+
+	// An unknown agent has no markers, and falls back to watching the pane.
+	s := newTmuxSession("t", "/usr/bin/bash", nil, nil)
+	if s.HasBusyMarker() {
+		t.Error("bash announces nothing and should have no busy marker")
+	}
+}
