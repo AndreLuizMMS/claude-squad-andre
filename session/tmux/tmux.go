@@ -187,6 +187,24 @@ func (t *TmuxSession) enableMouse() {
 	if err := t.cmdExec.Run(cmd); err != nil {
 		log.InfoLog.Printf("Warning: failed to enable tmux mouse mode for session %s: %v", t.sanitizedName, err)
 	}
+	t.setScrollSpeed()
+}
+
+// setScrollSpeed rebinds the wheel-scroll amount in copy-mode to
+// wheelScrollLines per tick. tmux defaults to 5, which reads as sluggish
+// when paging through a long session history.
+func (t *TmuxSession) setScrollSpeed() {
+	const wheelScrollLines = "10"
+	for _, table := range []string{"copy-mode", "copy-mode-vi"} {
+		for _, dir := range []string{"up", "down"} {
+			key := "Wheel" + strings.ToUpper(dir[:1]) + dir[1:] + "Pane"
+			cmd := exec.Command("tmux", "bind-key", "-T", table, key,
+				"send-keys", "-X", "-N", wheelScrollLines, "scroll-"+dir)
+			if err := t.cmdExec.Run(cmd); err != nil {
+				log.InfoLog.Printf("Warning: failed to set tmux scroll speed for session %s: %v", t.sanitizedName, err)
+			}
+		}
+	}
 }
 
 func (t *TmuxSession) Restore() error {
