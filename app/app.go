@@ -1061,6 +1061,9 @@ func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool
 		}
 		r.instance.SetUsageStats(r.usageStats)
 	}
+	// The 5-hour quota is account-wide, so it is read once per round rather
+	// than per session.
+	m.list.SetQuota(session.ReadQuota())
 	return finished
 }
 

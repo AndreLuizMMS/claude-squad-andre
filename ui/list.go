@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/lipgloss"
@@ -76,12 +77,22 @@ var autoYesStyle = lipgloss.NewStyle().
 	Background(lipgloss.Color("#dde4f0")).
 	Foreground(lipgloss.Color("#1a1a1a"))
 
+var quotaStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("#ffd23f"))
+
+var quotaWarnStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("#de613e"))
+
 type List struct {
 	items         []*session.Instance
 	selectedIdx   int
 	height, width int
 	renderer      *InstanceRenderer
 	autoyes       bool
+
+	// quota is the account-wide 5-hour usage, shown next to the list title
+	// because it is shared by every session rather than owned by one.
+	quota *session.Quota
 
 	// map of repo name to number of instances using it. Used to display the repo name only if there are
 	// multiple repos in play.
@@ -102,6 +113,11 @@ func NewList(spinner *spinner.Model, autoYes bool) *List {
 // clears it.
 func (l *List) SetNewInstanceHint(hint string) {
 	l.renderer.newInstanceHint = hint
+}
+
+// SetQuota sets the 5-hour usage shown in the list header. Nil hides it.
+func (l *List) SetQuota(q *session.Quota) {
+	l.quota = q
 }
 
 func (l *List) SetSize(width, height int) {
@@ -295,6 +311,24 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	return text
 }
 
+// quotaBadge renders the 5-hour usage plus the time left until it resets.
+// Empty when there is no fresh reading.
+func (l *List) quotaBadge() string {
+	if l.quota == nil {
+		return ""
+	}
+	text := fmt.Sprintf("⏳ %d%%", l.quota.Percent)
+	if left := time.Until(l.quota.ResetsAt); left > 0 {
+		left = left.Round(time.Minute)
+		text += fmt.Sprintf(" %d:%02d", int(left.Hours()), int(left.Minutes())%60)
+	}
+	style := quotaStyle
+	if l.quota.Percent >= 80 {
+		style = quotaWarnStyle
+	}
+	return style.Render(text + " ")
+}
+
 func (l *List) String() string {
 	const titleText = " Sessões "
 	const autoYesText = " auto-yes "
@@ -307,16 +341,24 @@ func (l *List) String() string {
 	// Write title line
 	// add padding of 2 because the border on list items adds some extra characters
 	titleWidth := AdjustPreviewWidth(l.width) + 2
-	if !l.autoyes {
+	var badges []string
+	if quota := l.quotaBadge(); quota != "" {
+		badges = append(badges, quota)
+	}
+	if l.autoyes {
+		badges = append(badges, autoYesStyle.Render(autoYesText))
+	}
+	if len(badges) == 0 {
 		b.WriteString(lipgloss.Place(
 			titleWidth, 1, lipgloss.Left, lipgloss.Bottom, mainTitle.Render(titleText)))
 	} else {
 		title := lipgloss.Place(
 			titleWidth/2, 1, lipgloss.Left, lipgloss.Bottom, mainTitle.Render(titleText))
-		autoYes := lipgloss.Place(
-			titleWidth-(titleWidth/2), 1, lipgloss.Right, lipgloss.Bottom, autoYesStyle.Render(autoYesText))
+		right := lipgloss.Place(
+			titleWidth-(titleWidth/2), 1, lipgloss.Right, lipgloss.Bottom,
+			lipgloss.JoinHorizontal(lipgloss.Bottom, badges...))
 		b.WriteString(lipgloss.JoinHorizontal(
-			lipgloss.Top, title, autoYes))
+			lipgloss.Top, title, right))
 	}
 
 	b.WriteString("\n")
