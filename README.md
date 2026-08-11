@@ -8,8 +8,8 @@
 ### Highlights
 - Complete tasks in the background (including yolo / auto-accept mode!)
 - Manage instances and tasks in one terminal window
-- Review changes before applying them, checkout changes before pushing them
-- Each task gets its own isolated git workspace, so no conflicts
+- Review the changes in each session's directory without leaving the terminal
+- Each session carries its own working directory, so one coordinator covers every project
 
 <br />
 
@@ -100,8 +100,7 @@ The menu at the bottom of the screen shows available commands:
 ##### Actions
 - `↵/o` - Attach to the selected session to reprompt
 - `ctrl-q` - Detach from session
-- `s` - Commit and push branch to github
-- `c` - Checkout. Commits changes and pauses the session
+- `c` - Pause: close the terminal and keep the session
 - `r` - Resume a paused session
 - `?` - Show help menu
 
@@ -150,7 +149,8 @@ underlying program (ex. `claude`) to the latest version.
 ### How It Works
 
 1. **tmux** to create isolated terminal sessions for each agent
-2. **git worktrees** to isolate codebases so each session works on its own branch
+2. Each session runs in a working directory you choose, editing it directly —
+   versioning stays entirely in your hands
 3. A simple TUI interface for easy navigation and management
 
 ### License
