@@ -11,7 +11,6 @@ O original é um gerenciador de branches: cada sessão nasce como worktree do gi
 | Cria worktree + branch por sessão | Roda direto no diretório escolhido, sem tocar em git |
 | Precisa abrir dentro de um repositório | Abre de qualquer lugar, repositório ou não |
 | Um coordenador por repositório | Um coordenador só para vários projetos |
-| Entrar na sessão toma a tela inteira | Entra na sessão com a lista continuando visível; `ctrl-l` volta |
 | Atalhos de push, checkout e diff de branch | Diretório da sessão no lugar da branch |
 | Interface em inglês | Interface em pt-br |
 
