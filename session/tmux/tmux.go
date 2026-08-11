@@ -135,11 +135,7 @@ func (t *TmuxSession) Start(workDir string) error {
 		log.InfoLog.Printf("Warning: failed to set history-limit for session %s: %v", t.sanitizedName, err)
 	}
 
-	// Enable mouse scrolling for the session
-	mouseCmd := exec.Command("tmux", "set-option", "-t", t.sanitizedName, "mouse", "on")
-	if err := t.cmdExec.Run(mouseCmd); err != nil {
-		log.InfoLog.Printf("Warning: failed to enable mouse scrolling for session %s: %v", t.sanitizedName, err)
-	}
+	t.disableMouse()
 
 	err = t.Restore()
 	if err != nil {
@@ -180,7 +176,20 @@ func (t *TmuxSession) CheckAndHandleTrustPrompt() bool {
 }
 
 // Restore attaches to an existing session and restores the window size
+// disableMouse turns tmux mouse mode off for this session. With it on, tmux
+// captures the drag into copy-mode and the next pane redraw wipes the
+// highlight, so selecting text to copy is impossible. Off, the terminal does
+// its own native selection. Sessions created before this existed still carry
+// mouse mode on, so it is reapplied on every restore too.
+func (t *TmuxSession) disableMouse() {
+	cmd := exec.Command("tmux", "set-option", "-t", t.sanitizedName, "mouse", "off")
+	if err := t.cmdExec.Run(cmd); err != nil {
+		log.InfoLog.Printf("Warning: failed to disable tmux mouse mode for session %s: %v", t.sanitizedName, err)
+	}
+}
+
 func (t *TmuxSession) Restore() error {
+	t.disableMouse()
 	ptmx, err := t.ptyFactory.Start(exec.Command("tmux", "attach-session", "-t", t.sanitizedName))
 	if err != nil {
 		return fmt.Errorf("error opening PTY: %w", err)
@@ -231,28 +240,34 @@ func (t *TmuxSession) SendKeys(keys string) error {
 }
 
 // HasUpdated checks if the tmux pane content has changed since the last tick. It also returns true if
-// the tmux pane has a prompt for aider or claude code.
-func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
+// the tmux pane has a prompt for aider or claude code, and whether the agent
+// still says it is working.
+func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool, busy bool) {
 	content, err := t.CapturePaneContent()
 	if err != nil {
 		log.ErrorLog.Printf("error capturing pane content in status monitor: %v", err)
-		return false, false
+		return false, false, false
 	}
 
 	// Only set hasPrompt for claude and aider. Use these strings to check for a prompt.
+	// The busy marker is what the agent itself draws while a turn is in flight,
+	// which is far more reliable than watching the pane for changes: an agent
+	// that thinks quietly for a second is still working.
 	if t.program == ProgramClaude {
 		hasPrompt = strings.Contains(content, "No, and tell Claude what to do differently")
+		busy = strings.Contains(content, "esc to interrupt")
 	} else if strings.HasPrefix(t.program, ProgramAider) {
 		hasPrompt = strings.Contains(content, "(Y)es/(N)o/(D)on't ask again")
 	} else if strings.HasPrefix(t.program, ProgramGemini) {
 		hasPrompt = strings.Contains(content, "Yes, allow once")
+		busy = strings.Contains(content, "esc to cancel")
 	}
 
 	if !bytes.Equal(t.monitor.hash(content), t.monitor.prevOutputHash) {
 		t.monitor.prevOutputHash = t.monitor.hash(content)
-		return true, hasPrompt
+		return true, hasPrompt, busy
 	}
-	return false, hasPrompt
+	return false, hasPrompt, busy
 }
 
 // detachKeyByte is ctrl+l: the key that leaves an attached session and returns

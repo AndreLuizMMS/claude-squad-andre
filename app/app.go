@@ -104,6 +104,9 @@ type home struct {
 	// armed marks sessions that worked long enough that finishing is worth
 	// announcing.
 	armed map[string]bool
+	// idleTicks counts consecutive quiet observations per session — see
+	// idleTicksToFinish.
+	idleTicks map[string]int
 	// metaTicks counts rounds of background observation, used to space out the
 	// expensive diff reads — see diffEveryNTicks.
 	metaTicks int
@@ -979,6 +982,11 @@ func (m *home) restorePreviewSize() {
 // an agent starting and stopping over and over.
 const busyTicksToArm = 3
 
+// idleTicksToFinish is how many consecutive quiet observations a session needs
+// before the turn counts as over. At 500ms a round this waits 3s, which covers
+// the pauses an agent takes mid-answer while it thinks or waits on a tool.
+const idleTicksToFinish = 6
+
 // applyMetadataResults folds a round of background observations into the list.
 // It reports whether any agent finished a real piece of work and handed the
 // turn back — the moment worth announcing.
@@ -991,6 +999,9 @@ func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool
 	if m.armed == nil {
 		m.armed = make(map[string]bool)
 	}
+	if m.idleTicks == nil {
+		m.idleTicks = make(map[string]int)
+	}
 
 	for _, r := range results {
 		// Skip instances that were paused while metadata was being computed
@@ -1002,6 +1013,7 @@ func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool
 			r.instance.SetStatus(session.Orphaned)
 			delete(m.busyTicks, id)
 			delete(m.armed, id)
+			delete(m.idleTicks, id)
 			continue
 		}
 		if r.instance.Status == session.Orphaned {
@@ -1009,9 +1021,10 @@ func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool
 			r.instance.SetStatus(session.Ready)
 		}
 
-		if r.updated {
+		if r.updated || r.busy {
 			r.instance.SetStatus(session.Running)
 			m.busyTicks[id]++
+			m.idleTicks[id] = 0
 			if m.busyTicks[id] >= busyTicksToArm {
 				m.armed[id] = true
 			}
@@ -1023,8 +1036,11 @@ func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool
 			} else {
 				r.instance.SetStatus(session.Ready)
 			}
-			// Announce once per stretch of work, never for a flicker.
-			if m.armed[id] {
+			m.idleTicks[id]++
+			// Announce once per stretch of work, never for a flicker, and only
+			// after the session has been quiet long enough that the turn is
+			// really over instead of the agent pausing mid-answer.
+			if m.armed[id] && m.idleTicks[id] >= idleTicksToFinish {
 				finished = true
 				r.instance.NeedsAttention = true
 				m.armed[id] = false
@@ -1112,6 +1128,8 @@ type instanceMetaResult struct {
 	instance  *session.Instance
 	updated   bool
 	hasPrompt bool
+	// busy is true while the agent itself reports a turn in flight.
+	busy      bool
 	diffStats *git.DiffStats
 	// dirMissing is true when the session's working directory no longer exists.
 	dirMissing bool
@@ -1175,7 +1193,7 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				if r.dirMissing = !instance.WorkingDirExists(); r.dirMissing {
 					return
 				}
-				r.updated, r.hasPrompt = instance.HasUpdated()
+				r.updated, r.hasPrompt, r.busy = instance.HasUpdated()
 				if !r.updated && !forceDiff {
 					return
 				}

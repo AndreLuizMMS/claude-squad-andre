@@ -30,9 +30,19 @@ func work(h *home, inst *session.Instance, n int) (finished bool) {
 	return finished
 }
 
-// idle feeds one round where nothing changed on the agent's screen.
-func idle(h *home, inst *session.Instance) bool {
+// idleRound feeds a single round where nothing changed on the agent's screen.
+func idleRound(h *home, inst *session.Instance) bool {
 	return h.applyMetadataResults([]instanceMetaResult{{instance: inst}})
+}
+
+// idle feeds enough quiet rounds for the turn to count as over.
+func idle(h *home, inst *session.Instance) (finished bool) {
+	for i := 0; i < idleTicksToFinish; i++ {
+		if idleRound(h, inst) {
+			finished = true
+		}
+	}
+	return finished
 }
 
 func TestBellRingsOnceWhenTheAgentAnswers(t *testing.T) {
@@ -61,9 +71,42 @@ func TestFlickerDoesNotRing(t *testing.T) {
 
 	for i := 0; i < 30; i++ {
 		assert.False(t, work(h, inst, 1), "single blip of activity, round %d", i)
-		assert.False(t, idle(h, inst), "back to idle right away, round %d", i)
+		assert.False(t, idleRound(h, inst), "back to idle right away, round %d", i)
 	}
 	assert.False(t, inst.NeedsAttention, "flicker never counts as an answer")
+}
+
+// TestAPauseMidAnswerDoesNotRing is the reported bug: the agent goes quiet for
+// a moment while it thinks or waits on a tool, and the old rule called that the
+// end of the turn and rang immediately.
+func TestAPauseMidAnswerDoesNotRing(t *testing.T) {
+	h := newTestHome(t)
+	inst := startedInstance(t, "thinking")
+
+	work(h, inst, busyTicksToArm)
+	for i := 0; i < idleTicksToFinish-1; i++ {
+		assert.False(t, idleRound(h, inst), "a short pause is not the end, round %d", i)
+	}
+	assert.False(t, inst.NeedsAttention, "nothing to read while the agent is mid-answer")
+
+	// It picks the answer back up, then really finishes.
+	work(h, inst, 1)
+	assert.True(t, idle(h, inst), "the real end of the turn rings")
+}
+
+// TestTheAgentSayingItIsBusyKeepsTheTurnOpen: the agent's own working marker
+// wins over a screen that happens not to change.
+func TestTheAgentSayingItIsBusyKeepsTheTurnOpen(t *testing.T) {
+	h := newTestHome(t)
+	inst := startedInstance(t, "busy")
+
+	work(h, inst, busyTicksToArm)
+	for i := 0; i < 20; i++ {
+		finished := h.applyMetadataResults([]instanceMetaResult{{instance: inst, busy: true}})
+		assert.False(t, finished, "still working, round %d", i)
+	}
+	assert.Equal(t, session.Running, inst.Status)
+	assert.True(t, idle(h, inst), "and it rings once the marker is gone")
 }
 
 func TestEachStretchOfWorkRingsAgain(t *testing.T) {
