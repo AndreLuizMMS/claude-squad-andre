@@ -11,6 +11,10 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=0
+    # The version printed by `cs version` comes from the tag being released, so
+    # it can never drift from the source constant.
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
 
 archives:
   - format: tar.gz

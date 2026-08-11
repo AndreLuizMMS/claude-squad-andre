@@ -124,7 +124,7 @@ var (
 		Short: "Print the version number",
 		Run: func(cmd *cobra.Command, args []string) {
 			fmt.Printf("%s version %s\n", binName, version)
-			fmt.Printf("https://github.com/smtg-ai/claude-squad/releases/tag/v%s\n", version)
+			fmt.Printf("https://github.com/AndreLuizMMS/claude-squad-andre/releases/tag/v%s\n", version)
 		},
 	}
 )
