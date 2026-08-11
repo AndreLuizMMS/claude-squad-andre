@@ -7,7 +7,6 @@ import (
 	"claude-squad/daemon"
 	"claude-squad/log"
 	"claude-squad/session"
-	"claude-squad/session/git"
 	"claude-squad/session/tmux"
 	"context"
 	"encoding/json"
@@ -37,16 +36,6 @@ var (
 				err := daemon.RunDaemon(cfg)
 				log.ErrorLog.Printf("failed to start daemon %v", err)
 				return err
-			}
-
-			// Check if we're in a git repository
-			currentDir, err := filepath.Abs(".")
-			if err != nil {
-				return fmt.Errorf("failed to get current directory: %w", err)
-			}
-
-			if !git.IsGitRepo(currentDir) {
-				return fmt.Errorf("error: %s must be run from within a git repository", binName)
 			}
 
 			cfg := config.LoadConfig()
@@ -98,11 +87,6 @@ var (
 				return fmt.Errorf("failed to cleanup tmux sessions: %w", err)
 			}
 			fmt.Println("Tmux sessions have been cleaned up")
-
-			if err := git.CleanupWorktrees(); err != nil {
-				return fmt.Errorf("failed to cleanup worktrees: %w", err)
-			}
-			fmt.Println("Worktrees have been cleaned up")
 
 			// Kill any daemon that's running.
 			if err := daemon.StopDaemon(); err != nil {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -40,8 +39,6 @@ type Config struct {
 	AutoYes bool `json:"auto_yes"`
 	// DaemonPollInterval is the interval (ms) at which the daemon polls sessions for autoyes mode.
 	DaemonPollInterval int `json:"daemon_poll_interval"`
-	// BranchPrefix is the prefix used for git branches created by the application.
-	BranchPrefix string `json:"branch_prefix"`
 	// Profiles is a list of named program profiles.
 	Profiles []Profile `json:"profiles,omitempty"`
 }
@@ -93,14 +90,6 @@ func DefaultConfig() *Config {
 		DefaultProgram:     program,
 		AutoYes:            false,
 		DaemonPollInterval: 1000,
-		BranchPrefix: func() string {
-			user, err := user.Current()
-			if err != nil || user == nil || user.Username == "" {
-				log.ErrorLog.Printf("failed to get current user: %v", err)
-				return "session/"
-			}
-			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
-		}(),
 	}
 }
 
