@@ -41,6 +41,10 @@ type Config struct {
 	DaemonPollInterval int `json:"daemon_poll_interval"`
 	// Profiles is a list of named program profiles.
 	Profiles []Profile `json:"profiles,omitempty"`
+	// DisableBell turns off the notification sound played when an agent stops
+	// working and hands the turn back. Off by default, so the sound is on for
+	// configurations written before this option existed.
+	DisableBell bool `json:"disable_bell,omitempty"`
 }
 
 // GetProgram returns the program to run. If Profiles is non-empty and
