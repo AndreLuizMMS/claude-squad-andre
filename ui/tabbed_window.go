@@ -59,7 +59,7 @@ type TabbedWindow struct {
 func NewTabbedWindow(preview *PreviewPane, diff *DiffPane, terminal *TerminalPane) *TabbedWindow {
 	return &TabbedWindow{
 		tabs: []string{
-			"Preview",
+			"Prévia",
 			"Diff",
 			"Terminal",
 		},

@@ -57,70 +57,70 @@ var GlobalKeyStringsMap = map[string]KeyName{
 var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyUp: key.NewBinding(
 		key.WithKeys("up", "k"),
-		key.WithHelp("↑/k", "up"),
+		key.WithHelp("↑/k", "cima"),
 	),
 	KeyDown: key.NewBinding(
 		key.WithKeys("down", "j"),
-		key.WithHelp("↓/j", "down"),
+		key.WithHelp("↓/j", "baixo"),
 	),
 	KeyShiftUp: key.NewBinding(
 		key.WithKeys("shift+up"),
-		key.WithHelp("shift+↑", "scroll"),
+		key.WithHelp("shift+↑", "rolar"),
 	),
 	KeyShiftDown: key.NewBinding(
 		key.WithKeys("shift+down"),
-		key.WithHelp("shift+↓", "scroll"),
+		key.WithHelp("shift+↓", "rolar"),
 	),
 	KeyEnter: key.NewBinding(
 		key.WithKeys("enter", "o"),
-		key.WithHelp("↵/o", "open"),
+		key.WithHelp("↵/o", "entrar"),
 	),
 	KeyNew: key.NewBinding(
 		key.WithKeys("n"),
-		key.WithHelp("n", "new"),
+		key.WithHelp("n", "nova"),
 	),
 	KeyKill: key.NewBinding(
 		key.WithKeys("D"),
-		key.WithHelp("D", "kill"),
+		key.WithHelp("D", "encerrar"),
 	),
 	KeyHelp: key.NewBinding(
 		key.WithKeys("?"),
-		key.WithHelp("?", "help"),
+		key.WithHelp("?", "ajuda"),
 	),
 	KeyQuit: key.NewBinding(
 		key.WithKeys("q"),
-		key.WithHelp("q", "quit"),
+		key.WithHelp("q", "sair"),
 	),
 	KeyPrompt: key.NewBinding(
 		key.WithKeys("N"),
-		key.WithHelp("N", "new with prompt"),
+		key.WithHelp("N", "nova com prompt"),
 	),
 	KeyPause: key.NewBinding(
 		key.WithKeys("c"),
-		key.WithHelp("c", "pause"),
+		key.WithHelp("c", "pausar"),
 	),
 	KeyTab: key.NewBinding(
 		key.WithKeys("tab"),
-		key.WithHelp("tab", "switch tab"),
+		key.WithHelp("tab", "trocar aba"),
 	),
 	KeyResume: key.NewBinding(
 		key.WithKeys("r"),
-		key.WithHelp("r", "resume"),
+		key.WithHelp("r", "retomar"),
 	),
 
 	KeyMoveUp: key.NewBinding(
 		key.WithKeys("K"),
-		key.WithHelp("K", "move up"),
+		key.WithHelp("K", "mover p/ cima"),
 	),
 	KeyMoveDown: key.NewBinding(
 		key.WithKeys("J"),
-		key.WithHelp("J", "move down"),
+		key.WithHelp("J", "mover p/ baixo"),
 	),
 
 	// -- Special keybindings --
 
 	KeySubmitName: key.NewBinding(
 		key.WithKeys("enter"),
-		key.WithHelp("enter", "submit name"),
+		key.WithHelp("enter", "confirmar nome"),
 	),
 }

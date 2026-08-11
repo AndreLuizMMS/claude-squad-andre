@@ -96,6 +96,14 @@ type home struct {
 	// loadErr holds a storage read failure so it can be surfaced once the UI is up.
 	loadErr error
 
+	// busyTicks counts, per session, how many consecutive observations saw the
+	// agent working. The pane content flickers (spinners, cursors), so a single
+	// observation means nothing — see applyMetadataResults.
+	busyTicks map[string]int
+	// armed marks sessions that worked long enough that finishing is worth
+	// announcing.
+	armed map[string]bool
+
 	// winWidth/winHeight are the last known dimensions of the whole terminal.
 	// Attaching hands the agent the entire window, so we need them.
 	winWidth, winHeight int
@@ -155,6 +163,8 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		autoYes:      autoYes,
 		state:        stateDefault,
 		appState:     appState,
+		busyTicks:    make(map[string]int),
+		armed:        make(map[string]bool),
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
 
@@ -266,7 +276,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.promptAfterName {
 			m.state = statePrompt
 			m.menu.SetState(ui.StatePrompt)
-			m.textInputOverlay = overlay.NewTextInputOverlay("Enter prompt", "")
+			m.textInputOverlay = overlay.NewTextInputOverlay("Digite o prompt", "")
 			m.promptAfterName = false
 		} else {
 			m.showHelpScreen(helpStart(inst), nil)
@@ -274,36 +284,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case metadataUpdateDoneMsg:
-		for _, r := range msg.results {
-			// Skip instances that were paused while metadata was being computed
-			if r.instance == nil || r.instance.Status == session.Paused {
-				continue
-			}
-			if r.dirMissing {
-				r.instance.SetStatus(session.Orphaned)
-				continue
-			}
-			if r.instance.Status == session.Orphaned {
-				// The directory came back; let the normal status detection resume.
-				r.instance.SetStatus(session.Ready)
-			}
-			if r.updated {
-				r.instance.SetStatus(session.Running)
-			} else if r.hasPrompt {
-				r.instance.TapEnter()
-			} else {
-				r.instance.SetStatus(session.Ready)
-			}
-			if r.diffStats != nil && r.diffStats.Error != nil {
-				if !strings.Contains(r.diffStats.Error.Error(), "base commit SHA not set") {
-					log.WarningLog.Printf("could not update diff stats: %v", r.diffStats.Error)
-				}
-				r.instance.SetDiffStats(nil)
-			} else {
-				r.instance.SetDiffStats(r.diffStats)
-			}
+		finished := m.applyMetadataResults(msg.results)
+		next := tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
+		if finished && !m.appConfig.DisableBell {
+			return m, tea.Batch(next, ringBell())
 		}
-		return m, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
+		return m, next
 	case tea.MouseMsg:
 		// Handle mouse wheel events for scrolling the diff/preview pane
 		if msg.Action == tea.MouseActionPress {
@@ -473,14 +459,14 @@ func (m *home) newInstanceHint(instance *session.Instance) string {
 		// what the developer needs to read.
 		switch n := len(m.pathCandidates); {
 		case n == 0:
-			return fmt.Sprintf("dir: %s_ [no match]", m.pathInput)
+			return fmt.Sprintf("dir: %s_ [sem correspondência]", m.pathInput)
 		case n == 1:
 			return fmt.Sprintf("dir: %s_ [tab]", m.pathInput)
 		default:
 			return fmt.Sprintf("dir: %s_ [tab %d]", m.pathInput, n)
 		}
 	default:
-		return "title  (enter to confirm)"
+		return "nome  (enter para confirmar)"
 	}
 }
 
@@ -802,7 +788,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		// Show confirmation modal
 		message := fmt.Sprintf(
-			"[!] Kill session '%s'? Only the terminal is closed; the directory is untouched.",
+			"[!] Encerrar a sessão '%s'? Apenas o terminal é fechado; o diretório fica intacto.",
 			selected.Title)
 		return m, m.confirmAction(message, killAction)
 	case keys.KeyPause:
@@ -887,6 +873,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				m.restorePreviewSize()
 			})
 		}
+		// Opening the session is the developer seeing the answer.
+		selected.NeedsAttention = false
+
 		// Show help screen before attaching
 		return m.showHelpScreen(helpTypeInstanceAttach{}, func() {
 			// Hand the agent the whole terminal. Its session is sized for the
@@ -926,6 +915,86 @@ func (m *home) restorePreviewSize() {
 	}
 	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
 		log.ErrorLog.Print(err)
+	}
+}
+
+// busyTicksToArm is how many consecutive "working" observations a session needs
+// before finishing counts as an answer. The status detector reports any change
+// in the pane, so spinners and blinking cursors alone would otherwise look like
+// an agent starting and stopping over and over.
+const busyTicksToArm = 3
+
+// applyMetadataResults folds a round of background observations into the list.
+// It reports whether any agent finished a real piece of work and handed the
+// turn back — the moment worth announcing.
+func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool) {
+	// A nil map here would panic in the main loop and take the whole coordinator
+	// down over a notification, so make sure they exist.
+	if m.busyTicks == nil {
+		m.busyTicks = make(map[string]int)
+	}
+	if m.armed == nil {
+		m.armed = make(map[string]bool)
+	}
+
+	for _, r := range results {
+		// Skip instances that were paused while metadata was being computed
+		if r.instance == nil || r.instance.Status == session.Paused {
+			continue
+		}
+		id := r.instance.ID()
+		if r.dirMissing {
+			r.instance.SetStatus(session.Orphaned)
+			delete(m.busyTicks, id)
+			delete(m.armed, id)
+			continue
+		}
+		if r.instance.Status == session.Orphaned {
+			// The directory came back; let the normal status detection resume.
+			r.instance.SetStatus(session.Ready)
+		}
+
+		if r.updated {
+			r.instance.SetStatus(session.Running)
+			m.busyTicks[id]++
+			if m.busyTicks[id] >= busyTicksToArm {
+				m.armed[id] = true
+			}
+			// Work restarted: whatever the developer had not seen is moot.
+			r.instance.NeedsAttention = false
+		} else {
+			if r.hasPrompt {
+				r.instance.TapEnter()
+			} else {
+				r.instance.SetStatus(session.Ready)
+			}
+			// Announce once per stretch of work, never for a flicker.
+			if m.armed[id] {
+				finished = true
+				r.instance.NeedsAttention = true
+				m.armed[id] = false
+			}
+			m.busyTicks[id] = 0
+		}
+
+		if r.diffStats != nil && r.diffStats.Error != nil {
+			if !strings.Contains(r.diffStats.Error.Error(), "base commit SHA not set") {
+				log.WarningLog.Printf("could not update diff stats: %v", r.diffStats.Error)
+			}
+			r.instance.SetDiffStats(nil)
+		} else {
+			r.instance.SetDiffStats(r.diffStats)
+		}
+	}
+	return finished
+}
+
+// ringBell asks the terminal to make its notification sound. It goes to stderr
+// so it never lands in the drawing the coordinator is doing on stdout.
+func ringBell() tea.Cmd {
+	return func() tea.Msg {
+		fmt.Fprint(os.Stderr, "\a")
+		return nil
 	}
 }
 
@@ -1083,7 +1152,7 @@ func (m *home) handleError(err error) tea.Cmd {
 }
 
 func (m *home) newPromptOverlay() *overlay.TextInputOverlay {
-	return overlay.NewTextInputOverlayWithProfiles("Enter prompt", "", m.appConfig.GetProfiles())
+	return overlay.NewTextInputOverlayWithProfiles("Digite o prompt", "", m.appConfig.GetProfiles())
 }
 
 // cancelPromptOverlay cancels the prompt overlay, cleaning up unstarted instances.

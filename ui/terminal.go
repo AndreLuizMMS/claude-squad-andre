@@ -75,15 +75,15 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 	defer t.mu.Unlock()
 
 	if instance == nil {
-		t.setFallbackState("Select an instance to open a terminal")
+		t.setFallbackState("Selecione uma sessão para abrir um terminal")
 		return nil
 	}
 	if instance.Status == session.Paused {
-		t.setFallbackState("Session is paused. Resume to use terminal.")
+		t.setFallbackState("Sessão pausada. Retome para usar o terminal.")
 		return nil
 	}
 	if !instance.Started() {
-		t.setFallbackState("Instance is not started yet.")
+		t.setFallbackState("Sessão ainda não foi iniciada.")
 		return nil
 	}
 
@@ -99,7 +99,7 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 
 	s, ok := t.sessions[t.currentTitle]
 	if !ok || s.tmuxSession == nil || !s.tmuxSession.DoesSessionExist() {
-		t.setFallbackState("Terminal session not available.")
+		t.setFallbackState("Sessão de terminal indisponível.")
 		return nil
 	}
 
@@ -312,7 +312,7 @@ func (t *TerminalPane) enterScrollMode() error {
 		return fmt.Errorf("terminal pane: failed to capture full history: %w", err)
 	}
 
-	footer := terminalFooterStyle.Render("ESC to exit scroll mode")
+	footer := terminalFooterStyle.Render("ESC para sair do modo de rolagem")
 	contentWithFooter := lipgloss.JoinVertical(lipgloss.Left, content, footer)
 	t.viewport.SetContent(contentWithFooter)
 	t.viewport.GotoBottom()

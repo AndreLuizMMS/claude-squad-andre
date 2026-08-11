@@ -16,6 +16,10 @@ const readyIcon = "● "
 const pausedIcon = "⏸ "
 const orphanedIcon = "⚠ "
 
+// attentionBadge marks a session that answered while the developer was looking
+// somewhere else. It is meant to be impossible to miss in a list of agents.
+const attentionBadge = " ⬤ RESPONDEU "
+
 var readyStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#51bd73", Dark: "#51bd73"})
 
@@ -30,6 +34,15 @@ var pausedStyle = lipgloss.NewStyle().
 
 var orphanedStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("#de613e"))
+
+var attentionBadgeStyle = lipgloss.NewStyle().
+	Bold(true).
+	Foreground(lipgloss.Color("#1a1a1a")).
+	Background(lipgloss.Color("#ffd23f"))
+
+var attentionTitleStyle = lipgloss.NewStyle().
+	Bold(true).
+	Foreground(lipgloss.Color("#ffd23f"))
 
 var titleStyle = lipgloss.NewStyle().
 	Padding(1, 1, 0, 1).
@@ -138,30 +151,42 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		titleS = titleStyle
 		descS = listDescStyle
 	}
-
-	// add spinner next to title if it's running
-	var join string
-	switch i.Status {
-	case session.Running, session.Loading:
-		join = fmt.Sprintf("%s ", r.spinner.View())
-	case session.Ready:
-		join = readyStyle.Render(readyIcon)
-	case session.Paused:
-		join = pausedStyle.Render(pausedIcon)
-	case session.Orphaned:
-		join = orphanedStyle.Render(orphanedIcon)
-	default:
+	if i.NeedsAttention && i.Status == session.Ready {
+		titleS = titleS.Foreground(attentionTitleStyle.GetForeground()).Bold(true)
 	}
 
-	// Cut the title if it's too long
+	// add spinner next to title if it's running. markerWidth is how many columns
+	// the marker occupies, so the title can be given the rest.
+	var join string
+	markerWidth := 2
+	switch {
+	case i.NeedsAttention && i.Status == session.Ready:
+		join = attentionBadgeStyle.Render(attentionBadge)
+		markerWidth = runewidth.StringWidth(attentionBadge)
+	case i.Status == session.Running, i.Status == session.Loading:
+		join = fmt.Sprintf("%s ", r.spinner.View())
+	case i.Status == session.Ready:
+		join = readyStyle.Render(readyIcon)
+	case i.Status == session.Paused:
+		join = pausedStyle.Render(pausedIcon)
+	case i.Status == session.Orphaned:
+		join = orphanedStyle.Render(orphanedIcon)
+	}
+
+	// Cut the title if it's too long. The marker takes its columns first: an
+	// alert nobody can read is not an alert.
+	titleArea := r.width - 1 - markerWidth
+	if titleArea < 1 {
+		titleArea = 1
+	}
 	titleText := i.Title
-	widthAvail := r.width - 3 - runewidth.StringWidth(prefix) - 1
+	widthAvail := titleArea - runewidth.StringWidth(prefix) - 1
 	if widthAvail > 0 && runewidth.StringWidth(titleText) > widthAvail {
-		titleText = runewidth.Truncate(titleText, widthAvail-3, "...")
+		titleText = runewidth.Truncate(titleText, widthAvail, "...")
 	}
 	title := titleS.Render(lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		lipgloss.Place(r.width-3, 1, lipgloss.Left, lipgloss.Center, fmt.Sprintf("%s %s", prefix, titleText)),
+		lipgloss.Place(titleArea, 1, lipgloss.Left, lipgloss.Center, fmt.Sprintf("%s %s", prefix, titleText)),
 		" ",
 		join,
 	))
@@ -207,7 +232,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		subtitle = r.newInstanceHint
 	} else if i.Status == session.Orphaned {
 		// Show the path that went missing so the state explains itself.
-		subtitle = "missing: " + i.Path
+		subtitle = "ausente: " + i.Path
 	}
 
 	// Don't show it if there's no space. Or show ellipsis if it's too long.
@@ -247,7 +272,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 }
 
 func (l *List) String() string {
-	const titleText = " Instances "
+	const titleText = " Sessões "
 	const autoYesText = " auto-yes "
 
 	// Write the title.

@@ -50,7 +50,7 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		d.height,
 		lipgloss.Center,
 		lipgloss.Center,
-		"No changes",
+		"Sem alterações",
 	)
 
 	if instance == nil || !instance.Started() {
