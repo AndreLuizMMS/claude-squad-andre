@@ -145,7 +145,8 @@ func TestDirectoryIsImmutableAfterStart(t *testing.T) {
 	defer func() { _ = inst.Kill() }()
 
 	assert.Error(t, inst.SetPath(t.TempDir()))
-	assert.Error(t, inst.SetTitle("other"))
+	// The title is only a label — see TestRenamingAStartedSessionKeepsItsIdentity.
+	assert.NoError(t, inst.SetTitle("other"))
 }
 
 // TestSessionLifecycle is the core promise: the coordinator runs the agent in
@@ -382,4 +383,74 @@ func nonEmptyLines(s string) []string {
 		}
 	}
 	return out
+}
+
+func TestDeleteInstanceDoesNotReviveTheOthers(t *testing.T) {
+	dirA, dirB := t.TempDir(), t.TempDir()
+	state := &memState{data: json.RawMessage("[]")}
+	storage, err := NewStorage(state)
+	require.NoError(t, err)
+
+	a, err := NewInstance(InstanceOptions{Title: "a", Path: dirA, Program: "bash"})
+	require.NoError(t, err)
+	require.NoError(t, a.Start(true))
+	defer func() { _ = a.Kill() }()
+
+	b, err := NewInstance(InstanceOptions{Title: "b", Path: dirB, Program: "bash"})
+	require.NoError(t, err)
+	require.NoError(t, b.Start(true))
+	defer func() { _ = b.Kill() }()
+
+	require.NoError(t, storage.SaveInstances([]*Instance{a, b}))
+
+	// Dropping one record must touch nothing but the stored list: no terminal of
+	// any other session is restarted along the way.
+	require.NoError(t, storage.DeleteInstance(a.ID()))
+	assert.True(t, b.TmuxAlive(), "the other session kept its terminal")
+
+	var datas []InstanceData
+	require.NoError(t, json.Unmarshal(state.data, &datas))
+	require.Len(t, datas, 1)
+	assert.Equal(t, b.ID(), datas[0].SessionID)
+
+	assert.ErrorContains(t, storage.DeleteInstance("nope"), "not found")
+}
+
+func TestOneUnreadableRecordDoesNotHideTheOthers(t *testing.T) {
+	good := t.TempDir()
+	// The first record is running, so loading it reopens a terminal — which fails
+	// here because tmux cannot be found. The paused one next to it opens no
+	// terminal and must still show up in the list.
+	t.Setenv("PATH", "")
+	state := &memState{data: json.RawMessage(`[
+		{"title":"broken","path":"` + good + `","status":0,"program":"bash","session_id":"broken-1"},
+		{"title":"good","path":"` + good + `","status":3,"program":"bash","session_id":"good-1"}
+	]`)}
+	storage, err := NewStorage(state)
+	require.NoError(t, err)
+
+	instances, err := storage.LoadInstances()
+	assert.ErrorContains(t, err, "broken")
+	require.Len(t, instances, 1)
+	assert.Equal(t, "good-1", instances[0].ID())
+}
+
+func TestRenamingAStartedSessionKeepsItsIdentity(t *testing.T) {
+	dir := t.TempDir()
+	inst, err := NewInstance(InstanceOptions{Title: "antes", Path: dir, Program: "bash"})
+	require.NoError(t, err)
+	require.NoError(t, inst.Start(true))
+	defer func() { _ = inst.Kill() }()
+
+	id := inst.ID()
+	require.NoError(t, inst.SetTitle("depois"))
+	assert.Equal(t, "depois", inst.Title)
+	assert.Equal(t, id, inst.ID(), "the terminal and the stored key never move")
+	assert.True(t, inst.TmuxAlive())
+
+	assert.Error(t, inst.SetTitle("   "), "an empty name is refused")
+
+	// A record from before identities existed keys everything off the title.
+	legacy := &Instance{Title: "legado", Path: dir, started: true}
+	assert.ErrorContains(t, legacy.SetTitle("novo"), "não pode ser renomeada")
 }

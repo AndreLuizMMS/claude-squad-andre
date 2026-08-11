@@ -2,8 +2,10 @@ package session
 
 import (
 	"claude-squad/config"
+	"claude-squad/log"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -75,66 +77,67 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		return nil, fmt.Errorf("failed to unmarshal instances: %w", err)
 	}
 
-	instances := make([]*Instance, len(instancesData))
-	for i, data := range instancesData {
+	// A record we cannot revive must not take the others with it: the session
+	// whose terminal refused to come back is dropped, the rest of the list opens
+	// normally, and the failure is reported alongside it.
+	instances := make([]*Instance, 0, len(instancesData))
+	var failures []string
+	for _, data := range instancesData {
 		instance, err := FromInstanceData(data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create instance %s: %w", data.Title, err)
+			log.ErrorLog.Printf("failed to restore session %s: %v", data.Title, err)
+			failures = append(failures, data.Title)
+			continue
 		}
-		instances[i] = instance
+		instances = append(instances, instance)
 	}
 
+	if len(failures) > 0 {
+		return instances, fmt.Errorf("could not restore %d session(s): %s",
+			len(failures), strings.Join(failures, ", "))
+	}
 	return instances, nil
 }
 
 // DeleteInstance removes an instance from storage, keyed by session identity
 // (SessionID, falling back to Title for records written by older versions).
+//
+// It works on the stored records directly instead of loading them: loading
+// revives every session it reads, which would restart the terminals of all the
+// other sessions just to drop one row.
 func (s *Storage) DeleteInstance(id string) error {
-	instances, err := s.LoadInstances()
-	if err != nil {
-		return fmt.Errorf("failed to load instances: %w", err)
+	var stored []InstanceData
+	if err := json.Unmarshal(s.state.GetInstances(), &stored); err != nil {
+		return fmt.Errorf("failed to unmarshal instances: %w", err)
 	}
 
+	kept := make([]InstanceData, 0, len(stored))
 	found := false
-	newInstances := make([]*Instance, 0)
-	for _, instance := range instances {
-		if instance.ID() != id {
-			newInstances = append(newInstances, instance)
-		} else {
+	for _, data := range stored {
+		if storedID(data) == id {
 			found = true
+			continue
 		}
+		kept = append(kept, data)
 	}
 
 	if !found {
 		return fmt.Errorf("instance not found: %s", id)
 	}
 
-	return s.SaveInstances(newInstances)
+	jsonData, err := json.Marshal(kept)
+	if err != nil {
+		return fmt.Errorf("failed to marshal instances: %w", err)
+	}
+	return s.state.SaveInstances(jsonData)
 }
 
-// UpdateInstance updates an existing instance in storage
-func (s *Storage) UpdateInstance(instance *Instance) error {
-	instances, err := s.LoadInstances()
-	if err != nil {
-		return fmt.Errorf("failed to load instances: %w", err)
+// storedID is the identity of a stored record, mirroring Instance.ID().
+func storedID(data InstanceData) string {
+	if data.SessionID != "" {
+		return data.SessionID
 	}
-
-	data := instance.ToInstanceData()
-	found := false
-	for i, existing := range instances {
-		existingData := existing.ToInstanceData()
-		if existingData.Title == data.Title {
-			instances[i] = instance
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		return fmt.Errorf("instance not found: %s", data.Title)
-	}
-
-	return s.SaveInstances(instances)
+	return data.Title
 }
 
 // DeleteAllInstances removes all stored instances
