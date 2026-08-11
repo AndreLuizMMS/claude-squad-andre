@@ -16,10 +16,16 @@ import (
 const readyIcon = "● "
 const pausedIcon = "⏸ "
 const orphanedIcon = "⚠ "
+const exitedIcon = "✖ "
 
 // attentionBadge marks a session that answered while the developer was looking
 // somewhere else. It is meant to be impossible to miss in a list of agents.
 const attentionBadge = " ⬤ RESPONDEU "
+
+// approvalBadge marks a session stopped on a question. It reads differently
+// from an answer on purpose: an answer waits for you, this one blocks the
+// agent until you get to it.
+const approvalBadge = " ⏵ APROVAR "
 
 var readyStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#51bd73", Dark: "#51bd73"})
@@ -44,6 +50,15 @@ var attentionBadgeStyle = lipgloss.NewStyle().
 var attentionTitleStyle = lipgloss.NewStyle().
 	Bold(true).
 	Foreground(lipgloss.Color("#ffd23f"))
+
+var approvalBadgeStyle = lipgloss.NewStyle().
+	Bold(true).
+	Foreground(lipgloss.Color("#ffffff")).
+	Background(lipgloss.Color("#d1495b"))
+
+var approvalTitleStyle = lipgloss.NewStyle().
+	Bold(true).
+	Foreground(lipgloss.Color("#ff6b81"))
 
 var titleStyle = lipgloss.NewStyle().
 	Padding(1, 1, 0, 1).
@@ -70,6 +85,11 @@ var mainTitle = lipgloss.NewStyle().
 var autoYesStyle = lipgloss.NewStyle().
 	Background(lipgloss.Color("#dde4f0")).
 	Foreground(lipgloss.Color("#1a1a1a"))
+
+var groupHeaderStyle = lipgloss.NewStyle().
+	Padding(0, 1).
+	Bold(true).
+	Foreground(lipgloss.AdaptiveColor{Light: "#655F5F", Dark: "#8a8a8a"})
 
 var quotaStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("#ffd23f"))
@@ -167,7 +187,10 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		titleS = titleStyle
 		descS = listDescStyle
 	}
-	if i.NeedsAttention && i.Status == session.Ready {
+	switch {
+	case i.NeedsApproval:
+		titleS = titleS.Foreground(approvalTitleStyle.GetForeground()).Bold(true)
+	case i.NeedsAttention && i.Status == session.Ready:
 		titleS = titleS.Foreground(attentionTitleStyle.GetForeground()).Bold(true)
 	}
 
@@ -176,6 +199,9 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	var join string
 	markerWidth := 2
 	switch {
+	case i.NeedsApproval:
+		join = approvalBadgeStyle.Render(approvalBadge)
+		markerWidth = runewidth.StringWidth(approvalBadge)
 	case i.NeedsAttention && i.Status == session.Ready:
 		join = attentionBadgeStyle.Render(attentionBadge)
 		markerWidth = runewidth.StringWidth(attentionBadge)
@@ -187,6 +213,8 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		join = pausedStyle.Render(pausedIcon)
 	case i.Status == session.Orphaned:
 		join = orphanedStyle.Render(orphanedIcon)
+	case i.Status == session.Exited:
+		join = orphanedStyle.Render(exitedIcon)
 	}
 
 	// Cut the title if it's too long. The marker takes its columns first: an
@@ -248,6 +276,10 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	} else if i.Status == session.Orphaned {
 		// Show the path that went missing so the state explains itself.
 		subtitle = "ausente: " + i.Path
+	} else if i.Status == session.Exited {
+		// The directory is fine; the agent is the part that is gone. Say which
+		// key brings it back, because the state looks like a dead end.
+		subtitle = "agente caiu — r para subir de novo"
 	}
 
 	// Don't show it if there's no space. Or show ellipsis if it's too long.
@@ -304,6 +336,20 @@ func (l *List) quotaBadge() string {
 	return style.Render(text + " ")
 }
 
+// groupHeader returns the project header to draw above an item, and whether it
+// should be drawn at all. There is nothing to separate when every session lives
+// in the same directory, and a session still being created has no directory yet.
+func (l *List) groupHeader(item *session.Instance, current string) (string, bool) {
+	if len(l.repos) < 2 || !item.Started() {
+		return "", false
+	}
+	name := item.DirName()
+	if name == current {
+		return "", false
+	}
+	return name, true
+}
+
 func (l *List) String() string {
 	const titleText = " Sessões "
 	const autoYesText = " auto-yes "
@@ -339,8 +385,19 @@ func (l *List) String() string {
 	b.WriteString("\n")
 	b.WriteString("\n")
 
-	// Render the list.
+	// Render the list, breaking it into projects. The header repeats whenever
+	// the directory changes, so reordering sessions by hand keeps working
+	// instead of being fought by the grouping.
+	group := ""
 	for i, item := range l.items {
+		if header, ok := l.groupHeader(item, group); ok {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(groupHeaderStyle.Render(header))
+			b.WriteString("\n")
+			group = header
+		}
 		b.WriteString(l.renderer.Render(item, i+1, i == l.selectedIdx, len(l.repos) > 1))
 		if i != len(l.items)-1 {
 			b.WriteString("\n\n")
@@ -388,6 +445,35 @@ func (l *List) Kill() {
 func (l *List) Attach() (chan struct{}, error) {
 	targetInstance := l.items[l.selectedIdx]
 	return targetInstance.Attach()
+}
+
+// SelectNextAttention selects the next session waiting on the developer,
+// wrapping around the list. It reports whether it found one: with a dozen
+// agents running, hunting the badge with the arrow keys is the slow part of
+// the job.
+//
+// Blocked sessions come first, wherever they are in the list. An agent stopped
+// on a question makes no progress until it is answered, while an answer waiting
+// to be read costs nothing to leave sitting.
+func (l *List) SelectNextAttention() bool {
+	blocked := func(i *session.Instance) bool { return i.NeedsApproval }
+	answered := func(i *session.Instance) bool {
+		return i.NeedsAttention && i.Status == session.Ready
+	}
+	return l.selectNext(blocked) || l.selectNext(answered)
+}
+
+// selectNext moves the selection to the next item after the current one that
+// matches, wrapping around. It leaves the selection alone when nothing matches.
+func (l *List) selectNext(match func(*session.Instance) bool) bool {
+	for offset := 1; offset <= len(l.items); offset++ {
+		idx := (l.selectedIdx + offset) % len(l.items)
+		if match(l.items[idx]) {
+			l.selectedIdx = idx
+			return true
+		}
+	}
+	return false
 }
 
 // Up selects the prev item in the list.

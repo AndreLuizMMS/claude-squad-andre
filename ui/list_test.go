@@ -73,3 +73,103 @@ func TestMoveWithSingleItem(t *testing.T) {
 	require.False(t, l.MoveUp())
 	require.False(t, l.MoveDown())
 }
+
+// answering marks an instance as having handed the turn back.
+func answering(inst *session.Instance) *session.Instance {
+	inst.NeedsAttention = true
+	inst.SetStatus(session.Ready)
+	return inst
+}
+
+func TestSelectNextAttention(t *testing.T) {
+	l := newTestList("a", "b", "c")
+	answering(l.items[2])
+	l.SetSelectedInstance(0)
+
+	require.True(t, l.SelectNextAttention())
+	require.Equal(t, 2, l.selectedIdx)
+}
+
+func TestSelectNextAttentionWrapsAround(t *testing.T) {
+	l := newTestList("a", "b", "c")
+	answering(l.items[0])
+	l.SetSelectedInstance(2)
+
+	require.True(t, l.SelectNextAttention())
+	require.Equal(t, 0, l.selectedIdx)
+}
+
+func TestSelectNextAttentionSkipsTheOneAlreadySelected(t *testing.T) {
+	l := newTestList("a", "b", "c")
+	answering(l.items[1])
+	answering(l.items[2])
+	l.SetSelectedInstance(1)
+
+	// Standing on an answer and pressing again moves on instead of staying put.
+	require.True(t, l.SelectNextAttention())
+	require.Equal(t, 2, l.selectedIdx)
+}
+
+func TestSelectNextAttentionWithNothingToSee(t *testing.T) {
+	l := newTestList("a", "b")
+	l.SetSelectedInstance(1)
+
+	require.False(t, l.SelectNextAttention())
+	require.Equal(t, 1, l.selectedIdx)
+
+	empty := newTestList()
+	require.False(t, empty.SelectNextAttention())
+}
+
+func TestGroupHeaderOnlyWhenProjectsDiffer(t *testing.T) {
+	l := newTestList("a", "b")
+	inst := l.items[0]
+
+	// One project in play: nothing to separate.
+	l.repos = map[string]int{"only": 1}
+	_, ok := l.groupHeader(inst, "")
+	require.False(t, ok)
+
+	l.repos = map[string]int{"one": 1, "two": 1}
+	// The session has not started, so it has no directory to group by yet.
+	_, ok = l.groupHeader(inst, "")
+	require.False(t, ok)
+}
+
+func TestGroupHeaderBreaksTheListByProject(t *testing.T) {
+	l := newTestList()
+	dir := t.TempDir()
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "worker", Path: dir, Program: "bash"})
+	require.NoError(t, err)
+	require.NoError(t, inst.Start(true))
+	t.Cleanup(func() { _ = inst.Kill() })
+
+	l.AddInstance(inst)
+	l.repos = map[string]int{"one": 1, "two": 1}
+
+	name := inst.DirName()
+	header, ok := l.groupHeader(inst, "")
+	require.True(t, ok, "the first session of a project gets a header")
+	require.Equal(t, name, header)
+
+	// The session right below it belongs to the same project: no second header.
+	_, ok = l.groupHeader(inst, name)
+	require.False(t, ok)
+}
+
+func TestBlockedSessionsAreVisitedFirst(t *testing.T) {
+	l := newTestList("a", "b", "c")
+	answering(l.items[1])
+	l.items[2].NeedsApproval = true
+	l.SetSelectedInstance(0)
+
+	// "b" is closer, but "c" is the one holding up its agent.
+	require.True(t, l.SelectNextAttention())
+	require.Equal(t, 2, l.selectedIdx)
+
+	// With nothing blocked left, the plain answer is next.
+	l.items[2].NeedsApproval = false
+	require.True(t, l.SelectNextAttention())
+	require.Equal(t, 1, l.selectedIdx)
+}
