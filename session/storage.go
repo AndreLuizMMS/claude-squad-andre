@@ -7,11 +7,12 @@ import (
 	"time"
 )
 
-// InstanceData represents the serializable data of an Instance
+// InstanceData represents the serializable data of an Instance. Fields written
+// by older versions that no longer exist (branch, mode, worktree) are simply
+// ignored on read.
 type InstanceData struct {
 	Title     string    `json:"title"`
 	Path      string    `json:"path"`
-	Branch    string    `json:"branch"`
 	Status    Status    `json:"status"`
 	Height    int       `json:"height"`
 	Width     int       `json:"width"`
@@ -19,19 +20,12 @@ type InstanceData struct {
 	UpdatedAt time.Time `json:"updated_at"`
 	AutoYes   bool      `json:"auto_yes"`
 
-	Program   string          `json:"program"`
-	Worktree  GitWorktreeData `json:"worktree"`
-	DiffStats DiffStatsData   `json:"diff_stats"`
-}
+	// SessionID is the stable identity of the session. Absent in older records,
+	// which fall back to the title.
+	SessionID string `json:"session_id"`
 
-// GitWorktreeData represents the serializable data of a GitWorktree
-type GitWorktreeData struct {
-	RepoPath         string `json:"repo_path"`
-	WorktreePath     string `json:"worktree_path"`
-	SessionName      string `json:"session_name"`
-	BranchName       string `json:"branch_name"`
-	BaseCommitSHA    string `json:"base_commit_sha"`
-	IsExistingBranch bool   `json:"is_existing_branch"`
+	Program   string        `json:"program"`
+	DiffStats DiffStatsData `json:"diff_stats"`
 }
 
 // DiffStatsData represents the serializable data of a DiffStats
@@ -93,8 +87,9 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 	return instances, nil
 }
 
-// DeleteInstance removes an instance from storage
-func (s *Storage) DeleteInstance(title string) error {
+// DeleteInstance removes an instance from storage, keyed by session identity
+// (SessionID, falling back to Title for records written by older versions).
+func (s *Storage) DeleteInstance(id string) error {
 	instances, err := s.LoadInstances()
 	if err != nil {
 		return fmt.Errorf("failed to load instances: %w", err)
@@ -103,8 +98,7 @@ func (s *Storage) DeleteInstance(title string) error {
 	found := false
 	newInstances := make([]*Instance, 0)
 	for _, instance := range instances {
-		data := instance.ToInstanceData()
-		if data.Title != title {
+		if instance.ID() != id {
 			newInstances = append(newInstances, instance)
 		} else {
 			found = true
@@ -112,7 +106,7 @@ func (s *Storage) DeleteInstance(title string) error {
 	}
 
 	if !found {
-		return fmt.Errorf("instance not found: %s", title)
+		return fmt.Errorf("instance not found: %s", id)
 	}
 
 	return s.SaveInstances(newInstances)
