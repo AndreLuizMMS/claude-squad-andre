@@ -1,22 +1,34 @@
 # Claude Squad (fork)
 
-Aplicação de terminal que gerencia várias sessões de agente ([Claude Code](https://github.com/anthropics/claude-code), Codex, Gemini, Aider) ao mesmo tempo, cada uma no seu próprio diretório de trabalho.
+Aplicação de terminal que gerencia várias sessões de agente ([Claude Code](https://github.com/anthropics/claude-code), Codex, Gemini, Aider) ao mesmo tempo, cada uma no seu próprio diretório.
 
-Diferenças em relação ao projeto de origem:
+## O que muda em relação ao original
 
-- Cada sessão roda **direto no diretório escolhido** — sem cópia de trabalho, sem branch própria, sem tocar em versionamento.
-- Abre a partir de **qualquer lugar**, inclusive fora de um repositório.
-- Um coordenador só atende **vários projetos** ao mesmo tempo.
+O original é um gerenciador de branches: cada sessão nasce como worktree do git, com branch própria, e o fluxo termina em commit/push/checkout. Aqui a sessão é só **um agente rodando numa pasta**.
 
-## Pré-requisitos
+| Original | Este fork |
+|---|---|
+| Cria worktree + branch por sessão | Roda direto no diretório escolhido, sem tocar em git |
+| Precisa abrir dentro de um repositório | Abre de qualquer lugar, repositório ou não |
+| Um coordenador por repositório | Um coordenador só para vários projetos |
+| Entrar na sessão toma a tela inteira | Entra na sessão com a lista continuando visível; `ctrl-l` volta |
+| Atalhos de push, checkout e diff de branch | Diretório da sessão no lugar da branch |
+| Interface em inglês | Interface em pt-br |
 
-- [tmux](https://github.com/tmux/tmux/wiki/Installing)
-- [Go](https://go.dev/dl/) 1.23 ou superior
-- O agente que você vai usar (`claude`, por padrão)
+Na prática: nada de preparar branch, nada de conciliar worktree, nada de limpar sujeira depois. Aponta a pasta, escolhe o agente, trabalha.
+
+Outras adições:
+
+- **Renomear** sessão já criada (`R`) e **abrir a pasta no editor** (`e`, padrão `cursor`).
+- **Configuração** de editor, limite de sessões e som de aviso.
+- Aviso sonoro toca **só quando o agente devolve a vez**, e o texto do terminal continua **selecionável para copiar**.
+- Encerrar uma sessão não reinicia as outras; registro corrompido não derruba a carga.
+- Sessão sem terminal volta **pausada** e retoma a conversa anterior em vez de começar do zero.
+- Instalador local (`install.sh`) — compila do código deste fork, sem baixar binário de release.
 
 ## Instalação
 
-Clone este repositório e rode o instalador:
+Precisa de [tmux](https://github.com/tmux/tmux/wiki/Installing), [Go](https://go.dev/dl/) 1.23+ e o agente (`claude`, por padrão).
 
 ```bash
 git clone git@github.com:AndreLuizMMS/claude-squad-andre.git
@@ -24,67 +36,30 @@ cd claude-squad-andre
 ./install.sh
 ```
 
-O binário é compilado a partir do código local e instalado como `cs` em `~/.local/bin`.
-
-Para usar outro nome:
-
-```bash
-./install.sh --name meu-cs
-```
-
-Para instalar em outro diretório:
-
-```bash
-BIN_DIR=/usr/local/bin ./install.sh
-```
-
-### Sem o instalador
-
-```bash
-go build -o ~/.local/bin/cs .
-```
-
-### Atualizar
-
-```bash
-git pull && ./install.sh
-```
+Instala como `cs` em `~/.local/bin`. Variações: `./install.sh --name meu-cs`, `BIN_DIR=/usr/local/bin ./install.sh`. Atualizar: `git pull && ./install.sh`.
 
 ## Uso
 
 ```bash
-cs
+cs              # abre na pasta atual
+cs -p codex     # troca o agente padrão nesta execução
 ```
 
-Trocar o agente padrão em uma execução:
-
-```bash
-cs -p "codex"
-```
-
-### Atalhos
+Fluxo: `n` cria a sessão (pede título, diretório — com autocomplete — e agente) → `↵` entra → `ctrl-l` sai para a lista → `c` pausa, `r` retoma, `D` encerra.
 
 | Tecla | Ação |
 |---|---|
-| `n` | Criar sessão |
-| `N` | Criar sessão com prompt |
-| `↵` / `o` | Entrar na sessão selecionada |
-| `ctrl-l` | Sair da sessão e voltar para a lista |
-| `c` | Pausar: fecha o terminal e mantém a sessão |
-| `r` | Retomar uma sessão pausada |
-| `D` | Encerrar a sessão selecionada |
-| `R` | Renomear a sessão selecionada |
-| `e` | Abrir o diretório da sessão no editor |
-| `↑/j`, `↓/k` | Navegar entre sessões |
-| `J`/`K` | Reordenar sessões |
-| `tab` | Alternar entre as abas |
-| `shift-↑/↓` | Rolar a aba ativa |
-| `?` | Ajuda |
-| `q` | Sair |
+| `n` / `N` | Criar sessão / criar já com prompt |
+| `↵` `o` / `ctrl-l` | Entrar na sessão / voltar para a lista |
+| `c` / `r` / `D` | Pausar / retomar / encerrar |
+| `R` / `e` | Renomear / abrir diretório no editor |
+| `↑↓` `jk` / `J` `K` | Navegar / reordenar |
+| `tab` / `shift-↑↓` | Trocar de aba / rolar a aba |
+| `?` / `q` | Ajuda / sair |
 
 ## Configuração
 
-Fica em `~/.claude-squad/config.json` (confirme o caminho com `cs debug`).
+`~/.claude-squad/config.json` (caminho exato em `cs debug`).
 
 ```json
 {
@@ -102,10 +77,10 @@ Fica em `~/.claude-squad/config.json` (confirme o caminho com `cs debug`).
 | Campo | Descrição |
 |---|---|
 | `default_program` | Agente usado ao criar sessões |
-| `disable_bell` | `true` desliga o som tocado quando um agente devolve a vez |
-| `editor_command` | Comando que a tecla `e` usa para abrir o diretório. Vazio: usa `$VISUAL`, depois `$EDITOR`, depois `cursor` |
+| `disable_bell` | `true` desliga o som de quando o agente devolve a vez |
+| `editor_command` | Comando da tecla `e`. Vazio: `$VISUAL`, depois `$EDITOR`, depois `cursor` |
 | `max_sessions` | Quantas sessões cabem ao mesmo tempo (padrão 10) |
-| `profiles` | Agentes disponíveis no seletor da criação de sessão |
+| `profiles` | Agentes oferecidos na criação de sessão |
 
 ## Licença
 
