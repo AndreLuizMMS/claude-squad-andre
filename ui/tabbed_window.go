@@ -28,9 +28,6 @@ var (
 	windowStyle = lipgloss.NewStyle().
 			BorderForeground(highlightColor).
 			Border(lipgloss.NormalBorder(), false, true, true, true)
-
-	// interactingColor marks the pane that is currently taking keystrokes.
-	interactingColor = lipgloss.AdaptiveColor{Light: "#1a8f4a", Dark: "#51bd73"}
 )
 
 const (
@@ -57,20 +54,6 @@ type TabbedWindow struct {
 	diff     *DiffPane
 	terminal *TerminalPane
 	instance *session.Instance
-
-	// interacting is true while key presses are being typed into the session.
-	// The pane border changes so it is obvious where the keyboard is going.
-	interacting bool
-}
-
-// SetInteracting marks the pane as receiving the developer's keystrokes.
-func (w *TabbedWindow) SetInteracting(v bool) {
-	w.interacting = v
-}
-
-// SendKeysToTerminal forwards raw key bytes to the shell of the terminal tab.
-func (w *TabbedWindow) SendKeysToTerminal(data string) error {
-	return w.terminal.SendKeys(data)
 }
 
 func NewTabbedWindow(preview *PreviewPane, diff *DiffPane, terminal *TerminalPane) *TabbedWindow {
@@ -201,6 +184,11 @@ func (w *TabbedWindow) GetActiveTab() int {
 	return w.activeTab
 }
 
+// AttachTerminal attaches to the terminal tmux session
+func (w *TabbedWindow) AttachTerminal() (chan struct{}, error) {
+	return w.terminal.Attach()
+}
+
 // CleanupTerminal closes the terminal session
 func (w *TabbedWindow) CleanupTerminal() {
 	w.terminal.Close()
@@ -276,11 +264,7 @@ func (w *TabbedWindow) String() string {
 	case TerminalTab:
 		content = w.terminal.String()
 	}
-	frame := windowStyle
-	if w.interacting {
-		frame = frame.BorderForeground(interactingColor)
-	}
-	window := frame.Render(
+	window := windowStyle.Render(
 		lipgloss.Place(
 			w.width, w.height-2-windowStyle.GetVerticalFrameSize()-tabHeight,
 			lipgloss.Left, lipgloss.Top, content))

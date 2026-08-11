@@ -183,18 +183,20 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 }
 
 // Attach attaches to the terminal tmux session (full-screen).
-
-// SendKeys forwards raw key bytes to the shell currently displayed.
-func (t *TerminalPane) SendKeys(data string) error {
+func (t *TerminalPane) Attach() (chan struct{}, error) {
 	t.mu.Lock()
 	s, ok := t.sessions[t.currentTitle]
 	if !ok || s.tmuxSession == nil {
 		t.mu.Unlock()
-		return fmt.Errorf("no terminal session to type into")
+		return nil, fmt.Errorf("no terminal session to attach to")
+	}
+	if !s.tmuxSession.DoesSessionExist() {
+		t.mu.Unlock()
+		return nil, fmt.Errorf("terminal session does not exist")
 	}
 	ts := s.tmuxSession
 	t.mu.Unlock()
-	return ts.SendKeys(data)
+	return ts.Attach()
 }
 
 // Close kills all cached terminal tmux sessions and cleans up.

@@ -56,6 +56,10 @@ type Instance struct {
 	// may not. Empty for instances stored by older versions, which fall back to
 	// the title.
 	SessionID string
+	// NeedsAttention marks a session that finished working and is waiting on the
+	// developer. It stays on until the session is opened, so an answer that
+	// arrives while you are looking elsewhere is still there when you come back.
+	NeedsAttention bool
 
 	// diffStats stores the current diff statistics for the working directory.
 	diffStats *git.DiffStats
@@ -422,6 +426,19 @@ func (i *Instance) TapEnter() {
 	if err := i.tmuxSession.TapEnter(); err != nil {
 		log.ErrorLog.Printf("error tapping enter: %v", err)
 	}
+}
+
+func (i *Instance) Attach() (chan struct{}, error) {
+	if !i.started {
+		return nil, fmt.Errorf("cannot attach instance that has not been started")
+	}
+	if i.Status == Paused {
+		return nil, fmt.Errorf("cannot attach a paused session, resume it first")
+	}
+	if i.Status == Orphaned {
+		return nil, fmt.Errorf("cannot attach an orphaned session, kill it instead")
+	}
+	return i.tmuxSession.Attach()
 }
 
 func (i *Instance) SetPreviewSize(width, height int) error {

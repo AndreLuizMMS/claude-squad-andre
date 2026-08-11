@@ -40,8 +40,6 @@ const (
 	StateEmpty
 	StateNewInstance
 	StatePrompt
-	// StateInteract is shown while typing into a session.
-	StateInteract
 )
 
 type Menu struct {
@@ -86,7 +84,7 @@ func (m *Menu) SetState(state MenuState) {
 func (m *Menu) SetInstance(instance *session.Instance) {
 	m.instance = instance
 	// Only change the state if we're not in a special state (NewInstance or Prompt)
-	if m.state != StateNewInstance && m.state != StatePrompt && m.state != StateInteract {
+	if m.state != StateNewInstance && m.state != StatePrompt {
 		if m.instance != nil {
 			m.state = StateDefault
 		} else {
@@ -119,8 +117,6 @@ func (m *Menu) updateOptions() {
 		m.options = newInstanceMenuOptions
 	case StatePrompt:
 		m.options = promptMenuOptions
-	case StateInteract:
-		m.options = nil
 	}
 }
 
@@ -171,14 +167,6 @@ func (m *Menu) SetSize(width, height int) {
 }
 
 func (m *Menu) String() string {
-	if m.state == StateInteract {
-		text := menuStyle.Render(
-			actionGroupStyle.Render("typing into the session") +
-				sepStyle.Render(verticalSeparator) +
-				keyStyle.Render("ctrl-l") + " " + descStyle.Render("back to the list and tabs"))
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, text)
-	}
-
 	var s strings.Builder
 
 	// Define group boundaries

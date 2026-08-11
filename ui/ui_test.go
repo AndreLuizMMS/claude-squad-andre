@@ -3,9 +3,11 @@ package ui
 import (
 	"claude-squad/session"
 	"claude-squad/session/git"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -125,4 +127,30 @@ func TestListShowsTheEndOfALongPathWhileTyping(t *testing.T) {
 
 	rendered := l.String()
 	assert.Contains(t, rendered, "typed/", "the tail being completed stays on screen")
+}
+
+func TestListShoutsWhenASessionAnswered(t *testing.T) {
+	sp := spinner.New()
+	l := NewList(&sp, false)
+	l.SetSize(60, 20)
+
+	inst, err := session.NewInstance(session.InstanceOptions{
+		Title: "answered", Path: t.TempDir(), Program: "bash",
+	})
+	require.NoError(t, err)
+	require.NoError(t, inst.Start(true))
+	defer func() { _ = inst.Kill() }()
+	l.AddInstance(inst)()
+
+	inst.SetStatus(session.Ready)
+	assert.NotContains(t, l.String(), "RESPONDEU", "a plain ready session is quiet")
+
+	inst.NeedsAttention = true
+	rendered := l.String()
+	assert.Contains(t, rendered, "RESPONDEU", "an unread answer is impossible to miss")
+
+	// The badge must not push the line past the width of the pane.
+	for _, line := range strings.Split(rendered, "\n") {
+		assert.LessOrEqual(t, lipgloss.Width(line), 62, "line overflows the list pane: %q", line)
+	}
 }

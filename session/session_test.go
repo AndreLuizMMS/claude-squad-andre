@@ -259,6 +259,8 @@ func TestSessionGoesOrphanWhenDirectoryDisappears(t *testing.T) {
 	// Invalid transitions are refused with an explicit message, changing nothing.
 	assert.ErrorContains(t, inst.Pause(), "orphaned")
 	assert.Equal(t, Orphaned, inst.Status)
+	_, err = inst.Attach()
+	assert.ErrorContains(t, err, "orphaned")
 }
 
 func TestResumeRefusedWhenNotPausedAndWhenDirectoryVanished(t *testing.T) {

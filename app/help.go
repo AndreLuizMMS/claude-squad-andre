@@ -25,7 +25,7 @@ type helpTypeInstanceStart struct {
 	instance *session.Instance
 }
 
-type helpTypeInstanceInteract struct{}
+type helpTypeInstanceAttach struct{}
 
 type helpTypeInstancePause struct{}
 
@@ -45,8 +45,8 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("D")+descStyle.Render("         - Kill (delete) the selected session"),
 		keyStyle.Render("↑/j, ↓/k")+descStyle.Render("  - Navigate between sessions"),
 		keyStyle.Render("J/K")+descStyle.Render("       - Reorder sessions"),
-		keyStyle.Render("↵/o")+descStyle.Render("       - Type into the selected session"),
-		keyStyle.Render("ctrl-l")+descStyle.Render("    - Stop typing and go back to the list and tabs"),
+		keyStyle.Render("↵/o")+descStyle.Render("       - Attach to the selected session"),
+		keyStyle.Render("ctrl-q")+descStyle.Render("    - Detach from session"),
 		"",
 		headerStyle.Render("Session state:"),
 		keyStyle.Render("c")+descStyle.Render("         - Pause: close the terminal, keep the session"),
@@ -73,7 +73,7 @@ func (h helpTypeInstanceStart) toContent() string {
 		descStyle.Render("The agent edits that directory directly. Versioning is yours to drive."),
 		"",
 		headerStyle.Render("Managing:"),
-		keyStyle.Render("↵/o")+descStyle.Render("   - Type into the session without losing the list"),
+		keyStyle.Render("↵/o")+descStyle.Render("   - Attach to the session to interact with it directly"),
 		keyStyle.Render("tab")+descStyle.Render("   - Switch preview panes to view session diff"),
 		keyStyle.Render("D")+descStyle.Render("     - Kill (delete) the selected session"),
 		keyStyle.Render("c")+descStyle.Render("     - Pause: close the terminal, keep the session"),
@@ -81,15 +81,11 @@ func (h helpTypeInstanceStart) toContent() string {
 	return content
 }
 
-func (h helpTypeInstanceInteract) toContent() string {
+func (h helpTypeInstanceAttach) toContent() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Talking to the session"),
+		titleStyle.Render("Attaching to Instance"),
 		"",
-		descStyle.Render("Everything you type goes to the agent, including ")+keyStyle.Render("ctrl-c")+descStyle.Render("."),
-		"",
-		descStyle.Render("The session list stays on screen, so you can keep an eye on the other agents."),
-		"",
-		descStyle.Render("To go back to the list and the tabs, press ")+keyStyle.Render("ctrl-l"),
+		descStyle.Render("To detach from a session, press ")+keyStyle.Render("ctrl-q"),
 	)
 	return content
 }
@@ -118,7 +114,7 @@ func (h helpTypeGeneral) mask() uint32 {
 func (h helpTypeInstanceStart) mask() uint32 {
 	return 1 << 1
 }
-func (h helpTypeInstanceInteract) mask() uint32 {
+func (h helpTypeInstanceAttach) mask() uint32 {
 	return 1 << 2
 }
 func (h helpTypeInstancePause) mask() uint32 {
@@ -173,14 +169,9 @@ func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, t
 
 // handleHelpState handles key events when in help state
 func (m *home) handleHelpState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Any key press will close the help overlay. Dismissing runs the callback,
-	// which may itself decide where to go next (typing into a session, for
-	// one) — so only fall back to the list when it did not.
+	// Any key press will close the help overlay
 	shouldClose := m.textOverlay.HandleKeyPress(msg)
 	if shouldClose {
-		if m.state != stateHelp {
-			return m, tea.WindowSize()
-		}
 		m.state = stateDefault
 		return m, tea.Sequence(
 			tea.WindowSize(),

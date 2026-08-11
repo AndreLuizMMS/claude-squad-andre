@@ -47,10 +47,6 @@ const (
 	stateHelp
 	// stateConfirm is the state when a confirmation modal is displayed.
 	stateConfirm
-	// stateInteract is the state when key presses are being typed into the
-	// selected session. The layout stays put: the list of sessions remains
-	// visible while you talk to one of them.
-	stateInteract
 )
 
 // newInstanceField is which field of the new-session form has focus. The form
@@ -100,9 +96,9 @@ type home struct {
 	// loadErr holds a storage read failure so it can be surfaced once the UI is up.
 	loadErr error
 
-	// interactTerminal is true when interactive keys go to the shell of the
-	// terminal tab instead of to the agent.
-	interactTerminal bool
+	// winWidth/winHeight are the last known dimensions of the whole terminal.
+	// Attaching hands the agent the entire window, so we need them.
+	winWidth, winHeight int
 
 	// keySent is used to manage underlining menu items
 	keySent bool
@@ -188,6 +184,8 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 // updateHandleWindowSizeEvent sets the sizes of the components.
 // The components will try to render inside their bounds.
 func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
+	m.winWidth, m.winHeight = msg.Width, msg.Height
+
 	// List takes 30% of width, preview takes 70%
 	listWidth := int(float32(msg.Width) * 0.3)
 	tabsWidth := msg.Width - listWidth
@@ -276,12 +274,36 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case metadataUpdateDoneMsg:
-		finished := m.applyMetadataResults(msg.results)
-		next := tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
-		if finished && !m.appConfig.DisableBell {
-			return m, tea.Batch(next, ringBell())
+		for _, r := range msg.results {
+			// Skip instances that were paused while metadata was being computed
+			if r.instance == nil || r.instance.Status == session.Paused {
+				continue
+			}
+			if r.dirMissing {
+				r.instance.SetStatus(session.Orphaned)
+				continue
+			}
+			if r.instance.Status == session.Orphaned {
+				// The directory came back; let the normal status detection resume.
+				r.instance.SetStatus(session.Ready)
+			}
+			if r.updated {
+				r.instance.SetStatus(session.Running)
+			} else if r.hasPrompt {
+				r.instance.TapEnter()
+			} else {
+				r.instance.SetStatus(session.Ready)
+			}
+			if r.diffStats != nil && r.diffStats.Error != nil {
+				if !strings.Contains(r.diffStats.Error.Error(), "base commit SHA not set") {
+					log.WarningLog.Printf("could not update diff stats: %v", r.diffStats.Error)
+				}
+				r.instance.SetDiffStats(nil)
+			} else {
+				r.instance.SetDiffStats(r.diffStats)
+			}
 		}
-		return m, next
+		return m, tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
 	case tea.MouseMsg:
 		// Handle mouse wheel events for scrolling the diff/preview pane
 		if msg.Action == tea.MouseActionPress {
@@ -540,12 +562,6 @@ func (m *home) startNewInstance(instance *session.Instance) (tea.Model, tea.Cmd)
 }
 
 func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
-	// Interactive mode owns every key, including the ones that are shortcuts
-	// elsewhere: they belong to the agent now.
-	if m.state == stateInteract {
-		return m.handleInteractKey(msg)
-	}
-
 	cmd, returnEarly := m.handleMenuHighlighting(msg)
 	if returnEarly {
 		return m, cmd
@@ -858,111 +874,59 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if !selected.TmuxAlive() {
 			return m, nil
 		}
-		// Start typing into the session without giving up the screen: the list of
-		// sessions stays visible so you can see what the other agents are doing.
-		m.interactTerminal = m.tabbedWindow.IsInTerminalTab()
-		return m.showHelpScreen(helpTypeInstanceInteract{}, func() {
-			m.state = stateInteract
-			m.menu.SetState(ui.StateInteract)
-			m.tabbedWindow.SetInteracting(true)
+		// Terminal tab: attach to terminal session
+		if m.tabbedWindow.IsInTerminalTab() {
+			return m.showHelpScreen(helpTypeInstanceAttach{}, func() {
+				ch, err := m.tabbedWindow.AttachTerminal()
+				if err != nil {
+					m.handleError(err)
+					return
+				}
+				<-ch
+				m.state = stateDefault
+				m.restorePreviewSize()
+			})
+		}
+		// Show help screen before attaching
+		return m.showHelpScreen(helpTypeInstanceAttach{}, func() {
+			// Hand the agent the whole terminal. Its session is sized for the
+			// preview pane while detached, and it would otherwise stay that
+			// small — a window's worth of screen showing a pane's worth of agent.
+			if m.winWidth > 0 && m.winHeight > 0 {
+				if err := selected.SetPreviewSize(m.winWidth, m.winHeight); err != nil {
+					log.ErrorLog.Print(err)
+				}
+			}
+
+			ch, err := m.list.Attach()
+			if err != nil {
+				m.handleError(err)
+				return
+			}
+			<-ch
+			m.state = stateDefault
+			// Attaching resized the agent's terminal to the whole window. Put it
+			// back to the preview shape right here, rather than waiting for the
+			// next resize event to notice.
+			m.restorePreviewSize()
+			m.instanceChanged()
 		})
 	default:
 		return m, nil
 	}
 }
 
-// applyMetadataResults folds a round of background observations into the list.
-// It reports whether any agent stopped working and is now waiting on the
-// developer — the moment worth being told about.
-func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool) {
-	for _, r := range results {
-		// Skip instances that were paused while metadata was being computed
-		if r.instance == nil || r.instance.Status == session.Paused {
-			continue
-		}
-		if r.dirMissing {
-			r.instance.SetStatus(session.Orphaned)
-			continue
-		}
-		if r.instance.Status == session.Orphaned {
-			// The directory came back; let the normal status detection resume.
-			r.instance.SetStatus(session.Ready)
-		}
-
-		was := r.instance.Status
-		if r.updated {
-			r.instance.SetStatus(session.Running)
-		} else if r.hasPrompt {
-			r.instance.TapEnter()
-		} else {
-			r.instance.SetStatus(session.Ready)
-		}
-		// Only the transition counts: an agent that has been idle for a while
-		// must not keep ringing.
-		if was == session.Running && r.instance.Status == session.Ready {
-			finished = true
-		}
-
-		if r.diffStats != nil && r.diffStats.Error != nil {
-			if !strings.Contains(r.diffStats.Error.Error(), "base commit SHA not set") {
-				log.WarningLog.Printf("could not update diff stats: %v", r.diffStats.Error)
-			}
-			r.instance.SetDiffStats(nil)
-		} else {
-			r.instance.SetDiffStats(r.diffStats)
-		}
+// restorePreviewSize re-applies the preview dimensions to every session's
+// terminal. Called after detaching, when the attached session was resized to the
+// full window and would otherwise render at the wrong shape inside the pane.
+func (m *home) restorePreviewSize() {
+	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
+	if previewWidth <= 0 || previewHeight <= 0 {
+		return
 	}
-	return finished
-}
-
-// ringBell asks the terminal to make its notification sound. It goes to stderr
-// so it never lands in the drawing the coordinator is doing on stdout.
-func ringBell() tea.Cmd {
-	return func() tea.Msg {
-		fmt.Fprint(os.Stderr, "\a")
-		return nil
+	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
+		log.ErrorLog.Print(err)
 	}
-}
-
-// handleInteractKey forwards a key press to the session being talked to. Only
-// the exit key is kept by the coordinator.
-func (m *home) handleInteractKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() == interactExitKey {
-		return m, m.leaveInteract()
-	}
-
-	selected := m.list.GetSelectedInstance()
-	if selected == nil || !selected.Started() || selected.Paused() || selected.Orphaned() {
-		return m, m.leaveInteract()
-	}
-
-	data := keyToBytes(msg)
-	if data == "" {
-		return m, nil
-	}
-
-	var err error
-	if m.interactTerminal {
-		err = m.tabbedWindow.SendKeysToTerminal(data)
-	} else {
-		err = selected.SendKeys(data)
-	}
-	if err != nil {
-		return m, m.handleError(err)
-	}
-
-	// Redraw immediately instead of waiting for the next tick, so typing feels
-	// like typing.
-	return m, m.instanceChanged()
-}
-
-// leaveInteract goes back to navigating the list.
-func (m *home) leaveInteract() tea.Cmd {
-	m.state = stateDefault
-	m.interactTerminal = false
-	m.menu.SetState(ui.StateDefault)
-	m.tabbedWindow.SetInteracting(false)
-	return tea.Batch(tea.WindowSize(), m.instanceChanged())
 }
 
 // instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. It returns an error

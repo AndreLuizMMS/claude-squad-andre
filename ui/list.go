@@ -319,6 +319,11 @@ func (l *List) Kill() {
 	l.items = append(l.items[:l.selectedIdx], l.items[l.selectedIdx+1:]...)
 }
 
+func (l *List) Attach() (chan struct{}, error) {
+	targetInstance := l.items[l.selectedIdx]
+	return targetInstance.Attach()
+}
+
 // Up selects the prev item in the list.
 func (l *List) Up() {
 	if len(l.items) == 0 {
