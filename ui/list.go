@@ -27,12 +27,6 @@ var readyStyle = lipgloss.NewStyle().
 var addedLinesStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#51bd73", Dark: "#51bd73"})
 
-var usageStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#888888"})
-
-var usageWarnStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.Color("#de613e"))
-
 var removedLinesStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("#de613e"))
 
@@ -233,23 +227,6 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		)
 	}
 
-	// Context-window usage, read from the Claude Code transcript. Shown next
-	// to the diff stats so it's visible without opening the session.
-	var usageText string
-	if usage := i.GetUsageStats(); usage != nil {
-		usageText = fmt.Sprintf("%d%%ctx ", usage.Percent)
-		style := usageStyle
-		if usage.Percent >= 80 {
-			style = usageWarnStyle
-		}
-		usageBadge := style.Background(descS.GetBackground()).Render(usageText)
-		if diff == "" {
-			diff = usageBadge
-		} else {
-			diff = lipgloss.JoinHorizontal(lipgloss.Center, usageBadge, diff)
-		}
-	}
-
 	remainingWidth := r.width
 	remainingWidth -= runewidth.StringWidth(prefix)
 	remainingWidth -= runewidth.StringWidth(dirIcon)
@@ -259,8 +236,6 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	if diffWidth > 0 {
 		diffWidth += 1
 	}
-	diffWidth += runewidth.StringWidth(usageText)
-
 	// Use fixed width for diff stats to avoid layout issues
 	remainingWidth -= diffWidth
 
