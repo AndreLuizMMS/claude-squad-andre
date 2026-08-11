@@ -28,6 +28,10 @@ const (
 	Paused
 	// Orphaned is if the instance's working directory no longer exists.
 	Orphaned
+	// Exited is if the agent's process ended on its own — it crashed, was
+	// killed from outside, or simply quit. The terminal is gone but the session
+	// and its directory are still here, so it can be started again.
+	Exited
 )
 
 // Instance is a running agent working in a directory. The coordinator manages
@@ -62,6 +66,10 @@ type Instance struct {
 	// developer. It stays on until the session is opened, so an answer that
 	// arrives while you are looking elsewhere is still there when you come back.
 	NeedsAttention bool
+	// NeedsApproval marks a session stopped on a question it cannot answer by
+	// itself. Unlike NeedsAttention, which is an answer waiting to be read,
+	// this is the agent blocked: nothing moves until the developer replies.
+	NeedsApproval bool
 
 	// diffStats stores the current diff statistics for the working directory.
 	diffStats *git.DiffStats
@@ -403,7 +411,7 @@ func (i *Instance) combineErrors(errs []error) error {
 }
 
 func (i *Instance) Preview() (string, error) {
-	if !i.started || i.Status == Paused || i.Status == Orphaned {
+	if i.inactive() {
 		return "", nil
 	}
 	return i.tmuxSession.CapturePaneContent()
@@ -414,6 +422,16 @@ func (i *Instance) HasUpdated() (updated bool, hasPrompt bool, busy bool) {
 		return false, false, false
 	}
 	return i.tmuxSession.HasUpdated()
+}
+
+// HasBusyMarker reports whether this session's agent says out loud when it is
+// working. When it does, that is the signal to trust; when it does not, all we
+// have is the pane changing.
+func (i *Instance) HasBusyMarker() bool {
+	if !i.started || i.tmuxSession == nil {
+		return false
+	}
+	return i.tmuxSession.HasBusyMarker()
 }
 
 // CheckAndHandleTrustPrompt checks for and dismisses the trust prompt for supported programs.
@@ -450,11 +468,14 @@ func (i *Instance) Attach() (chan struct{}, error) {
 	if i.Status == Orphaned {
 		return nil, fmt.Errorf("cannot attach an orphaned session, kill it instead")
 	}
+	if i.Status == Exited {
+		return nil, fmt.Errorf("the agent exited, press r to start it again")
+	}
 	return i.tmuxSession.Attach()
 }
 
 func (i *Instance) SetPreviewSize(width, height int) error {
-	if !i.started || i.Status == Paused || i.Status == Orphaned {
+	if i.inactive() {
 		return fmt.Errorf("cannot set preview size for instance that has not been started or " +
 			"is paused")
 	}
@@ -488,6 +509,17 @@ func (i *Instance) Paused() bool {
 	return i.Status == Paused
 }
 
+// HasExited reports whether the agent's process ended without being asked to.
+func (i *Instance) HasExited() bool {
+	return i.Status == Exited
+}
+
+// inactive reports whether the session has no terminal to talk to. Every read
+// of the agent's screen has to check this first: there is no pane to capture.
+func (i *Instance) inactive() bool {
+	return !i.started || i.Status == Paused || i.Status == Orphaned || i.Status == Exited
+}
+
 // TmuxAlive returns true if the tmux session is alive. This is a sanity check before attaching.
 func (i *Instance) TmuxAlive() bool {
 	return i.tmuxSession.DoesSessionExist()
@@ -505,6 +537,9 @@ func (i *Instance) Pause() error {
 	}
 	if i.Status == Orphaned {
 		return fmt.Errorf("cannot pause an orphaned session, kill it instead")
+	}
+	if i.Status == Exited {
+		return fmt.Errorf("the agent already exited, there is no terminal to close")
 	}
 
 	var errs []error
@@ -528,8 +563,11 @@ func (i *Instance) Resume() error {
 	if !i.started {
 		return fmt.Errorf("cannot resume instance that has not been started")
 	}
-	if i.Status != Paused {
-		return fmt.Errorf("can only resume paused instances")
+	// A session whose agent quit on its own resumes the same way a paused one
+	// does: a fresh terminal in the same directory, picking the conversation
+	// back up. Nothing else is left to restore.
+	if i.Status != Paused && i.Status != Exited {
+		return fmt.Errorf("can only resume paused or exited instances")
 	}
 
 	// A session whose directory vanished cannot be resumed.
@@ -588,7 +626,7 @@ func (i *Instance) UpdateDiffStats() error {
 // ComputeDiff runs the expensive diff I/O and returns the result without
 // mutating instance state. Safe to call from a background goroutine.
 func (i *Instance) ComputeDiff() *git.DiffStats {
-	if !i.started || i.Status == Paused || i.Status == Orphaned {
+	if i.inactive() {
 		return nil
 	}
 	return git.DirectDiff(i.Path, false)
@@ -599,7 +637,7 @@ func (i *Instance) ComputeDiff() *git.DiffStats {
 // full diff content is not currently needed so we avoid keeping large diffs in
 // memory.
 func (i *Instance) ComputeDiffNumstat() *git.DiffStats {
-	if !i.started || i.Status == Paused || i.Status == Orphaned {
+	if i.inactive() {
 		return nil
 	}
 	return git.DirectDiff(i.Path, true)
@@ -654,7 +692,7 @@ type transcriptLine struct {
 // isn't running or no transcript is found yet. Safe to call from a
 // background goroutine.
 func (i *Instance) ComputeUsage() *UsageStats {
-	if !i.started || i.Status == Paused || i.Status == Orphaned {
+	if i.inactive() {
 		return nil
 	}
 	return computeUsageFromTranscripts(i.Path)
@@ -788,7 +826,7 @@ func (i *Instance) SendPrompt(prompt string) error {
 
 // PreviewFullHistory captures the entire tmux pane output including full scrollback history
 func (i *Instance) PreviewFullHistory() (string, error) {
-	if !i.started || i.Status == Paused {
+	if i.inactive() {
 		return "", nil
 	}
 	return i.tmuxSession.CapturePaneContentWithOptions("-", "-")
@@ -801,7 +839,7 @@ func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 
 // SendKeys sends keys to the tmux session
 func (i *Instance) SendKeys(keys string) error {
-	if !i.started || i.Status == Paused {
+	if i.inactive() {
 		return fmt.Errorf("cannot send keys to instance that has not been started or is paused")
 	}
 	return i.tmuxSession.SendKeys(keys)

@@ -107,15 +107,13 @@ type home struct {
 	// idleTicks counts consecutive quiet observations per session — see
 	// idleTicksToFinish.
 	idleTicks map[string]int
+	// notices holds what happened in the last round of observation, already
+	// phrased ("worker respondeu"), for the desktop notification. Naming the
+	// session is the point: the developer is in another window.
+	notices []string
 	// metaTicks counts rounds of background observation, used to space out the
 	// expensive diff reads — see diffEveryNTicks.
 	metaTicks int
-	// diffDirty asks the next observation round to read every diff, regardless of
-	// the periodic schedule. Set when the selection moves: the newly selected
-	// session needs the full diff content the pane renders, and waiting for the
-	// next scheduled read would leave the pane blank.
-	diffDirty bool
-
 	// winWidth/winHeight are the last known dimensions of the whole terminal.
 	// Attaching hands the agent the entire window, so we need them.
 	winWidth, winHeight int
@@ -161,7 +159,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		ctx:          ctx,
 		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewTerminalPane()),
+		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewTerminalPane()),
 		errBox:       ui.NewErrBox(),
 		storage:      storage,
 		appConfig:    appConfig,
@@ -236,7 +234,7 @@ func (m *home) Init() tea.Cmd {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
 		},
-		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true),
+		tickUpdateMetadataCmd(m.snapshotActiveInstances(), true),
 	}
 	if m.loadErr != nil {
 		err := m.loadErr
@@ -263,12 +261,18 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.menu.ClearKeydown()
 		return m, nil
 	case metadataUpdateDoneMsg:
-		finished := m.applyMetadataResults(msg.results)
+		m.applyMetadataResults(msg.results)
 		m.metaTicks++
-		next := tickUpdateMetadataCmd(
-			m.snapshotActiveInstances(), m.list.GetSelectedInstance(), m.forceDiffRead())
-		if finished && !m.appConfig.DisableBell {
-			return m, tea.Batch(next, ringBell())
+		next := tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.forceDiffRead())
+		if len(m.notices) > 0 {
+			cmds := []tea.Cmd{next}
+			if !m.appConfig.DisableBell {
+				cmds = append(cmds, ringBell())
+			}
+			if notify := m.notifyPending(); notify != nil {
+				cmds = append(cmds, notify)
+			}
+			return m, tea.Batch(cmds...)
 		}
 		return m, next
 	case tea.MouseMsg:
@@ -638,10 +642,18 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 					return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
 				}
 
-				// Regular flow: instance already running, just send prompt
+				// Regular flow: the session is already running, so the prompt is
+				// a follow-up. Nothing was created, so there is no "session
+				// created" screen to show — the developer goes back to the list
+				// and can fire the next one.
 				if err := selected.SendPrompt(prompt); err != nil {
 					return m, m.handleError(err)
 				}
+				selected.NeedsAttention = false
+				m.textInputOverlay = nil
+				m.state = stateDefault
+				m.menu.SetState(ui.StateDefault)
+				return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 			}
 
 			// Close the overlay and reset state
@@ -735,13 +747,33 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		m.beginNewInstance(instance)
 		return m, nil
+	case keys.KeyNextAttention:
+		if !m.list.SelectNextAttention() {
+			return m, nil
+		}
+		return m, m.instanceChanged()
+	case keys.KeySendPrompt:
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || selected.Status == session.Loading {
+			return m, nil
+		}
+		if !selected.Started() || selected.Paused() || selected.HasExited() {
+			return m, m.handleError(fmt.Errorf(
+				"a sessão '%s' não está rodando — retome antes de mandar prompt", selected.Title))
+		}
+		if selected.Orphaned() {
+			return m, m.handleError(fmt.Errorf(
+				"a sessão '%s' perdeu seu diretório", selected.Title))
+		}
+		m.state = statePrompt
+		m.menu.SetState(ui.StatePrompt)
+		m.textInputOverlay = overlay.NewTextInputOverlay("Digite o prompt", "")
+		return m, tea.WindowSize()
 	case keys.KeyUp:
 		m.list.Up()
-		m.diffDirty = true
 		return m, m.instanceChanged()
 	case keys.KeyDown:
 		m.list.Down()
-		m.diffDirty = true
 		return m, m.instanceChanged()
 	case keys.KeyShiftUp:
 		m.tabbedWindow.ScrollUp()
@@ -850,7 +882,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
-		if !selected.Paused() {
+		if !selected.Paused() && !selected.HasExited() {
 			return m, m.handleError(fmt.Errorf("session '%s' is not paused", selected.Title))
 		}
 		if err := selected.Resume(); err != nil {
@@ -868,6 +900,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected.Paused() {
 			return m, m.handleError(fmt.Errorf(
 				"session '%s' is paused — resume it first", selected.Title))
+		}
+		if selected.HasExited() {
+			return m, m.handleError(fmt.Errorf(
+				"o agente da sessão '%s' caiu — aperte r para subir de novo", selected.Title))
 		}
 		if selected.Orphaned() {
 			return m, m.handleError(fmt.Errorf(
@@ -1002,6 +1038,7 @@ func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool
 	if m.idleTicks == nil {
 		m.idleTicks = make(map[string]int)
 	}
+	m.notices = m.notices[:0]
 
 	for _, r := range results {
 		// Skip instances that were paused while metadata was being computed
@@ -1010,10 +1047,18 @@ func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool
 		}
 		id := r.instance.ID()
 		if r.dirMissing {
+			m.forget(r.instance)
 			r.instance.SetStatus(session.Orphaned)
-			delete(m.busyTicks, id)
-			delete(m.armed, id)
-			delete(m.idleTicks, id)
+			continue
+		}
+		if r.dead {
+			// Worth announcing: an agent that died is a session that stopped
+			// making progress without ever handing the turn back.
+			if !r.instance.HasExited() {
+				m.notices = append(m.notices, fmt.Sprintf("%s caiu", r.instance.Title))
+			}
+			m.forget(r.instance)
+			r.instance.SetStatus(session.Exited)
 			continue
 		}
 		if r.instance.Status == session.Orphaned {
@@ -1021,29 +1066,51 @@ func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool
 			r.instance.SetStatus(session.Ready)
 		}
 
-		if r.updated || r.busy {
+		// An agent that says when it is working is taken at its word. Only the
+		// ones that say nothing are judged by their screen changing, which
+		// counts a spinner, a blinking cursor or a clock as work.
+		working := r.busy
+		if !r.hasBusyMarker {
+			working = r.updated || r.busy
+		}
+		if working {
 			r.instance.SetStatus(session.Running)
 			m.busyTicks[id]++
 			m.idleTicks[id] = 0
 			if m.busyTicks[id] >= busyTicksToArm {
 				m.armed[id] = true
 			}
-			// Work restarted: whatever the developer had not seen is moot.
+			// Work restarted: whatever the developer had not seen is moot, and
+			// nothing is blocked anymore.
 			r.instance.NeedsAttention = false
+			r.instance.NeedsApproval = false
 		} else {
+			// A question on screen is the agent stopped, not the agent working:
+			// it stays that way until someone answers. Auto-yes answers it for
+			// the developer; without it, the session is blocked and says so.
+			blocked := r.hasPrompt && !r.instance.AutoYes
 			if r.hasPrompt {
 				r.instance.TapEnter()
-			} else {
-				r.instance.SetStatus(session.Ready)
 			}
-			m.idleTicks[id]++
-			// Announce once per stretch of work, never for a flicker, and only
-			// after the session has been quiet long enough that the turn is
-			// really over instead of the agent pausing mid-answer.
-			if m.armed[id] && m.idleTicks[id] >= idleTicksToFinish {
-				finished = true
-				r.instance.NeedsAttention = true
-				m.armed[id] = false
+			r.instance.SetStatus(session.Ready)
+			if blocked && !r.instance.NeedsApproval {
+				m.notices = append(m.notices, fmt.Sprintf("%s pediu aprovação", r.instance.Title))
+			}
+			r.instance.NeedsApproval = blocked
+			if !blocked {
+				m.idleTicks[id]++
+				// Announce once per stretch of work, never for a flicker, and
+				// only after the session has been quiet long enough that the
+				// turn is really over instead of the agent pausing mid-answer.
+				//
+				// A blocked session is skipped entirely: its turn is not over,
+				// it is held up, and it already said so.
+				if m.armed[id] && m.idleTicks[id] >= idleTicksToFinish {
+					finished = true
+					r.instance.NeedsAttention = true
+					m.armed[id] = false
+					m.notices = append(m.notices, fmt.Sprintf("%s respondeu", r.instance.Title))
+				}
 			}
 			m.busyTicks[id] = 0
 		}
@@ -1067,6 +1134,17 @@ func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool
 	return finished
 }
 
+// forget drops the observation counters of a session that stopped being
+// watched, so it starts from a clean slate if it comes back.
+func (m *home) forget(instance *session.Instance) {
+	id := instance.ID()
+	delete(m.busyTicks, id)
+	delete(m.armed, id)
+	delete(m.idleTicks, id)
+	instance.NeedsAttention = false
+	instance.NeedsApproval = false
+}
+
 // ringBell asks the terminal to make its notification sound. It goes to stderr
 // so it never lands in the drawing the coordinator is doing on stdout.
 func ringBell() tea.Cmd {
@@ -1082,7 +1160,6 @@ func (m *home) instanceChanged() tea.Cmd {
 	// selected may be nil
 	selected := m.list.GetSelectedInstance()
 
-	m.tabbedWindow.UpdateDiff(selected)
 	m.tabbedWindow.SetInstance(selected)
 	// Update menu with current instance
 	m.menu.SetInstance(selected)
@@ -1133,11 +1210,16 @@ type instanceMetaResult struct {
 	updated   bool
 	hasPrompt bool
 	// busy is true while the agent itself reports a turn in flight.
-	busy       bool
+	busy bool
+	// hasBusyMarker is true when this agent reports its working state at all.
+	hasBusyMarker bool
 	diffStats  *git.DiffStats
 	usageStats *session.UsageStats
 	// dirMissing is true when the session's working directory no longer exists.
 	dirMissing bool
+	// dead is true when the agent's terminal is gone: the process ended without
+	// being asked to.
+	dead bool
 	// diffRead is true when this round actually read the diff. When false, the
 	// previous numbers stay on screen instead of being wiped by a read that
 	// never happened.
@@ -1155,7 +1237,10 @@ type metadataUpdateDoneMsg struct {
 func (m *home) snapshotActiveInstances() []*session.Instance {
 	var out []*session.Instance
 	for _, inst := range m.list.GetInstances() {
-		if inst.Started() && !inst.Paused() {
+		// An exited session has no terminal left to read, so watching it would
+		// only log the same failure twice a second. It comes back when the
+		// developer starts it again.
+		if inst.Started() && !inst.Paused() && !inst.HasExited() {
 			out = append(out, inst)
 		}
 	}
@@ -1168,16 +1253,15 @@ func (m *home) snapshotActiveInstances() []*session.Instance {
 // The active instances slice should be snapshotted on the main thread via
 // snapshotActiveInstances() before being passed here.
 //
-// Only the selected instance gets a full diff (with Content); the rest get a
-// lightweight numstat-only summary. This keeps per-instance memory bounded
-// since the diff pane only ever renders the selected one.
+// Only the added/removed line counts are read, never the diff text: the list
+// shows the counters and nothing renders the contents.
 //
-// The diff is read only when the session's terminal changed or when forceDiff
+// The counters are read only when the session's terminal changed or when forceDiff
 // says the periodic refresh is due. Reading it every round means running git
 // over the whole working directory twice a second per session, which costs
 // real CPU on a large repository and tells us nothing new while the agent is
 // idle.
-func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instance, forceDiff bool) tea.Cmd {
+func tickUpdateMetadataCmd(active []*session.Instance, forceDiff bool) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(500 * time.Millisecond)
 
@@ -1198,16 +1282,20 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				if r.dirMissing = !instance.WorkingDirExists(); r.dirMissing {
 					return
 				}
+				// The agent is the only process in its terminal, so the terminal
+				// disappearing means the agent ended. Without this check the
+				// session keeps its last status — a green "ready" dot for an
+				// agent that is not there anymore.
+				if r.dead = !instance.TmuxAlive(); r.dead {
+					return
+				}
 				r.updated, r.hasPrompt, r.busy = instance.HasUpdated()
+				r.hasBusyMarker = instance.HasBusyMarker()
 				if !r.updated && !forceDiff {
 					return
 				}
 				r.diffRead = true
-				if instance == selected {
-					r.diffStats = instance.ComputeDiff()
-				} else {
-					r.diffStats = instance.ComputeDiffNumstat()
-				}
+				r.diffStats = instance.ComputeDiffNumstat()
 				r.usageStats = instance.ComputeUsage()
 			}(idx, inst)
 		}
@@ -1221,15 +1309,11 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 // idle session. At 500ms a round, an untouched session is re-read every 2s.
 const diffEveryNTicks = 4
 
-// forceDiffRead reports whether this round should read the diff of every
-// session, including the ones whose terminal did not change. Edits made outside
-// the agent are invisible to the terminal watcher, so the counters would
-// otherwise go stale.
+// forceDiffRead reports whether this round should refresh the line counters of
+// every session, including the ones whose terminal did not change. Edits made
+// outside the agent are invisible to the terminal watcher, so the counters
+// would otherwise go stale.
 func (m *home) forceDiffRead() bool {
-	if m.diffDirty {
-		m.diffDirty = false
-		return true
-	}
 	return m.metaTicks%diffEveryNTicks == 0
 }
 

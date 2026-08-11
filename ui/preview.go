@@ -73,6 +73,18 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 				)),
 		))
 		return nil
+	case instance.Status == session.Exited:
+		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,
+			"O agente saiu por conta própria.",
+			"",
+			lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#de613e")).
+				Render(fmt.Sprintf(
+					"O terminal se foi; '%s' segue intacto. Pressione 'r' para subir o agente de novo.",
+					instance.Path,
+				)),
+		))
+		return nil
 	}
 
 	var content string

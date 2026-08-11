@@ -156,12 +156,6 @@ func TestDiffIsReadOnScheduleAndOnSelectionChange(t *testing.T) {
 	}
 	h.metaTicks = diffEveryNTicks
 	assert.True(t, h.forceDiffRead(), "the periodic refresh still happens")
-
-	// Moving the selection needs the full diff right away — the pane renders it.
-	h.metaTicks = 1
-	h.diffDirty = true
-	assert.True(t, h.forceDiffRead(), "a new selection is read immediately")
-	assert.False(t, h.forceDiffRead(), "and only once")
 }
 
 // TestSkippedDiffKeepsThePreviousNumbers: a round that did not read the diff
@@ -176,4 +170,129 @@ func TestSkippedDiffKeepsThePreviousNumbers(t *testing.T) {
 
 	h.applyMetadataResults([]instanceMetaResult{{instance: inst}})
 	assert.Equal(t, stats, inst.GetDiffStats(), "a skipped read leaves the numbers alone")
+}
+
+// TestScreenChurnIsIgnoredWhenTheAgentReportsItself is the detection fix: an
+// agent that says when it is working (claude, gemini) must not be judged by its
+// screen changing, which counts spinners, clocks and blinking cursors as work.
+func TestScreenChurnIsIgnoredWhenTheAgentReportsItself(t *testing.T) {
+	h := newTestHome(t)
+	inst := startedInstance(t, "chatty")
+
+	for i := 0; i < 30; i++ {
+		finished := h.applyMetadataResults([]instanceMetaResult{
+			{instance: inst, updated: true, hasBusyMarker: true},
+		})
+		assert.False(t, finished, "the screen moved but the agent is not working, round %d", i)
+	}
+	assert.Equal(t, session.Ready, inst.Status, "a redrawing screen is not a busy agent")
+	assert.False(t, inst.NeedsAttention, "and never becomes an answer")
+
+	// The agent's own marker still drives a real turn from start to finish.
+	for i := 0; i < busyTicksToArm; i++ {
+		h.applyMetadataResults([]instanceMetaResult{
+			{instance: inst, busy: true, hasBusyMarker: true},
+		})
+	}
+	assert.Equal(t, session.Running, inst.Status)
+
+	var finished bool
+	for i := 0; i < idleTicksToFinish; i++ {
+		if h.applyMetadataResults([]instanceMetaResult{{instance: inst, hasBusyMarker: true}}) {
+			finished = true
+		}
+	}
+	assert.True(t, finished, "the marker going away ends the turn")
+	assert.Equal(t, []string{"chatty respondeu"}, h.notices, "and the notification names the session")
+}
+
+func TestNotifyCommand(t *testing.T) {
+	// A configured notifier receives the title and the body as its last args.
+	cmd := notifyCommand("my-notifier --urgent", "Claude Squad", "worker respondeu")
+	require.NotNil(t, cmd)
+	assert.Equal(t, []string{"my-notifier", "--urgent", "Claude Squad", "worker respondeu"}, cmd.Args)
+
+	// A machine with no notifier is not an error: the bell still rings.
+	cmd = notifyCommand("", "t", "b")
+	if cmd != nil {
+		assert.NotEmpty(t, cmd.Path)
+	}
+}
+
+func TestNotifyBodyNamesTheSessions(t *testing.T) {
+	assert.Equal(t, "", notifyBody(nil))
+	assert.Equal(t, "worker respondeu", notifyBody([]string{"worker respondeu"}))
+	assert.Equal(t, "a respondeu • b caiu", notifyBody([]string{"a respondeu", "b caiu"}))
+}
+
+// TestAQuestionOnScreenIsNotAnAnswer separates the two states that used to look
+// alike: an agent that finished its turn versus an agent stopped on a question
+// it cannot answer by itself. The second one blocks until someone replies.
+func TestAQuestionOnScreenBlocksTheSession(t *testing.T) {
+	h := newTestHome(t)
+	inst := startedInstance(t, "asking")
+
+	work(h, inst, busyTicksToArm)
+	finished := h.applyMetadataResults([]instanceMetaResult{{instance: inst, hasPrompt: true}})
+
+	assert.False(t, finished, "a question is not the turn being handed back")
+	assert.True(t, inst.NeedsApproval, "the session is blocked on the developer")
+	assert.Equal(t, session.Ready, inst.Status, "waiting on an answer is not working")
+	assert.Equal(t, []string{"asking pediu aprovação"}, h.notices)
+
+	// The question stays on screen until answered, and must announce only once.
+	for i := 0; i < 10; i++ {
+		h.applyMetadataResults([]instanceMetaResult{{instance: inst, hasPrompt: true}})
+		assert.Empty(t, h.notices, "the same question announces once, round %d", i)
+	}
+	assert.True(t, inst.NeedsApproval)
+
+	// Answered: the agent goes back to work and nothing is blocked anymore.
+	work(h, inst, 1)
+	assert.False(t, inst.NeedsApproval)
+}
+
+func TestAutoYesAnswersInsteadOfBlocking(t *testing.T) {
+	h := newTestHome(t)
+	inst := startedInstance(t, "auto")
+	inst.AutoYes = true
+
+	h.applyMetadataResults([]instanceMetaResult{{instance: inst, hasPrompt: true}})
+	assert.False(t, inst.NeedsApproval, "auto-yes answers it, so nobody is blocked")
+	assert.Empty(t, h.notices)
+}
+
+// TestAnAgentThatDiedStopsLookingReady is the second lie the list used to tell:
+// the agent's process ends, its terminal goes with it, and the session keeps
+// the green dot it had at the moment it died.
+func TestAnAgentThatDiedStopsLookingReady(t *testing.T) {
+	h := newTestHome(t)
+	inst := startedInstance(t, "gone")
+
+	work(h, inst, busyTicksToArm)
+	require.True(t, idle(h, inst))
+	require.True(t, inst.NeedsAttention)
+
+	h.applyMetadataResults([]instanceMetaResult{{instance: inst, dead: true}})
+	assert.Equal(t, session.Exited, inst.Status)
+	assert.False(t, inst.NeedsAttention, "there is nothing left to read")
+	assert.Equal(t, []string{"gone caiu"}, h.notices)
+
+	// It stays dead quietly instead of announcing itself every round.
+	for i := 0; i < 10; i++ {
+		h.applyMetadataResults([]instanceMetaResult{{instance: inst, dead: true}})
+		assert.Empty(t, h.notices, "round %d", i)
+	}
+}
+
+func TestADeadSessionIsNoLongerWatched(t *testing.T) {
+	h := newTestHome(t)
+	inst := startedInstance(t, "watched")
+	h.list.AddInstance(inst)
+
+	require.Len(t, h.snapshotActiveInstances(), 1)
+
+	h.applyMetadataResults([]instanceMetaResult{{instance: inst, dead: true}})
+	assert.Empty(t, h.snapshotActiveInstances(),
+		"reading a terminal that is gone only fills the log with the same failure")
 }
