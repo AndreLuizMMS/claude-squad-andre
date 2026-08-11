@@ -424,19 +424,6 @@ func (i *Instance) TapEnter() {
 	}
 }
 
-func (i *Instance) Attach() (chan struct{}, error) {
-	if !i.started {
-		return nil, fmt.Errorf("cannot attach instance that has not been started")
-	}
-	if i.Status == Paused {
-		return nil, fmt.Errorf("cannot attach a paused session, resume it first")
-	}
-	if i.Status == Orphaned {
-		return nil, fmt.Errorf("cannot attach an orphaned session, kill it instead")
-	}
-	return i.tmuxSession.Attach()
-}
-
 func (i *Instance) SetPreviewSize(width, height int) error {
 	if !i.started || i.Status == Paused || i.Status == Orphaned {
 		return fmt.Errorf("cannot set preview size for instance that has not been started or " +
