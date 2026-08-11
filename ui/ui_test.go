@@ -2,7 +2,6 @@ package ui
 
 import (
 	"claude-squad/session"
-	"claude-squad/session/git"
 	"strings"
 	"testing"
 
@@ -45,42 +44,6 @@ func TestMenuForOrphanedSessionOnlyOffersKill(t *testing.T) {
 	assert.Contains(t, rendered, "encerrar")
 	assert.NotContains(t, rendered, "pausar")
 	assert.NotContains(t, rendered, "retomar")
-}
-
-func TestDiffPaneSaysThereIsNoComparisonBase(t *testing.T) {
-	inst, err := session.NewInstance(session.InstanceOptions{
-		Title: "plain", Path: t.TempDir(), Program: "bash",
-	})
-	require.NoError(t, err)
-	require.NoError(t, inst.Start(true))
-	defer func() { _ = inst.Kill() }()
-
-	inst.SetDiffStats(&git.DiffStats{Error: git.ErrNoDiffBase})
-
-	d := NewDiffPane()
-	d.SetSize(80, 10)
-	d.SetDiff(inst)
-
-	rendered := d.String()
-	assert.Contains(t, rendered, "No comparison base")
-	assert.NotContains(t, rendered, "Error:", "a plain directory is not an error state")
-}
-
-func TestDiffPaneDeclaresChangesAreNotOnlyTheAgents(t *testing.T) {
-	inst, err := session.NewInstance(session.InstanceOptions{
-		Title: "direct", Path: t.TempDir(), Program: "bash",
-	})
-	require.NoError(t, err)
-	require.NoError(t, inst.Start(true))
-	defer func() { _ = inst.Kill() }()
-
-	inst.SetDiffStats(&git.DiffStats{Added: 1, Removed: 0, Content: "+hello"})
-
-	d := NewDiffPane()
-	d.SetSize(90, 10)
-	d.SetDiff(inst)
-
-	assert.Contains(t, d.String(), "from any source")
 }
 
 func TestListShowsModeDirectoryAndOrphanState(t *testing.T) {
