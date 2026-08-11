@@ -135,7 +135,7 @@ func (t *TmuxSession) Start(workDir string) error {
 		log.InfoLog.Printf("Warning: failed to set history-limit for session %s: %v", t.sanitizedName, err)
 	}
 
-	t.disableMouse()
+	t.enableMouse()
 
 	err = t.Restore()
 	if err != nil {
@@ -176,20 +176,21 @@ func (t *TmuxSession) CheckAndHandleTrustPrompt() bool {
 }
 
 // Restore attaches to an existing session and restores the window size
-// disableMouse turns tmux mouse mode off for this session. With it on, tmux
-// captures the drag into copy-mode and the next pane redraw wipes the
-// highlight, so selecting text to copy is impossible. Off, the terminal does
-// its own native selection. Sessions created before this existed still carry
-// mouse mode on, so it is reapplied on every restore too.
-func (t *TmuxSession) disableMouse() {
-	cmd := exec.Command("tmux", "set-option", "-t", t.sanitizedName, "mouse", "off")
+// enableMouse turns tmux mouse mode on for this session, which lets the
+// mouse wheel scroll the pane's history. Selecting text to copy still works:
+// hold Shift while dragging, which every mainstream terminal (Windows
+// Terminal, iTerm2, GNOME Terminal, etc.) treats as a request to bypass the
+// app's mouse capture and do native selection instead. Reapplied on every
+// restore in case a session was created before this existed.
+func (t *TmuxSession) enableMouse() {
+	cmd := exec.Command("tmux", "set-option", "-t", t.sanitizedName, "mouse", "on")
 	if err := t.cmdExec.Run(cmd); err != nil {
-		log.InfoLog.Printf("Warning: failed to disable tmux mouse mode for session %s: %v", t.sanitizedName, err)
+		log.InfoLog.Printf("Warning: failed to enable tmux mouse mode for session %s: %v", t.sanitizedName, err)
 	}
 }
 
 func (t *TmuxSession) Restore() error {
-	t.disableMouse()
+	t.enableMouse()
 	ptmx, err := t.ptyFactory.Start(exec.Command("tmux", "attach-session", "-t", t.sanitizedName))
 	if err != nil {
 		return fmt.Errorf("error opening PTY: %w", err)

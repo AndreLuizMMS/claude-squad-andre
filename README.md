@@ -20,7 +20,7 @@ Outras adições:
 
 - **Renomear** sessão já criada (`R`) e **abrir a pasta no editor** (`e`, padrão `cursor`).
 - **Configuração** de editor, limite de sessões e som de aviso.
-- Aviso sonoro toca **só quando o agente devolve a vez**, e o texto do terminal continua **selecionável para copiar**.
+- Aviso sonoro toca **só quando o agente devolve a vez**. Roda do mouse rola o histórico da sessão; **Shift+arraste** seleciona texto pra copiar.
 - Encerrar uma sessão não reinicia as outras; registro corrompido não derruba a carga.
 - Sessão sem terminal volta **pausada** e retoma a conversa anterior em vez de começar do zero.
 - Instalador local (`install.sh`) — compila do código deste fork, sem baixar binário de release.
