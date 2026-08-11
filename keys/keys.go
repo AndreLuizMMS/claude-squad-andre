@@ -32,6 +32,9 @@ const (
 
 	KeyOpenEditor // Open the session directory in the configured editor
 	KeyRename     // Rename a session already in the list
+
+	KeyNextAttention // Jump to the next session that handed the turn back
+	KeySendPrompt    // Send a prompt to the selected session without attaching
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -56,6 +59,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"?":          KeyHelp,
 	"e":          KeyOpenEditor,
 	"R":          KeyRename,
+	" ":          KeyNextAttention,
+	"p":          KeySendPrompt,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -130,6 +135,16 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyRename: key.NewBinding(
 		key.WithKeys("R"),
 		key.WithHelp("R", "renomear"),
+	),
+
+	KeyNextAttention: key.NewBinding(
+		key.WithKeys(" "),
+		key.WithHelp("espaço", "próxima que respondeu"),
+	),
+
+	KeySendPrompt: key.NewBinding(
+		key.WithKeys("p"),
+		key.WithHelp("p", "mandar prompt"),
 	),
 
 	// -- Special keybindings --

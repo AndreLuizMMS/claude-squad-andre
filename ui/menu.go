@@ -138,15 +138,23 @@ func (m *Menu) addInstanceOptions() {
 
 	// Action group. Versioning is entirely the developer's business, so nothing
 	// here touches git.
-	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeyOpenEditor}
+	// A session whose agent exited has no terminal to talk to: all it can do is
+	// come back up, or be killed.
+	if m.instance.HasExited() {
+		m.options = append(options, keys.KeyResume, keys.KeyOpenEditor, keys.KeyTab,
+			keys.KeyHelp, keys.KeyQuit)
+		return
+	}
+
+	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySendPrompt, keys.KeyOpenEditor}
 	if m.instance.Status == session.Paused {
 		actionGroup = append(actionGroup, keys.KeyResume)
 	} else {
 		actionGroup = append(actionGroup, keys.KeyPause)
 	}
 
-	// Navigation group (when in diff tab)
-	if m.activeTab == DiffTab || m.activeTab == TerminalTab {
+	// Navigation group (when the pane has history to scroll)
+	if m.activeTab == TerminalTab {
 		actionGroup = append(actionGroup, keys.KeyShiftUp)
 	}
 
