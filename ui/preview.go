@@ -68,8 +68,8 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 					Dark:  "#FFD700",
 				}).
 				Render(fmt.Sprintf(
-					"The instance can be checked out at '%s' (copied to your clipboard)",
-					instance.Branch,
+					"Paused. The terminal is closed; '%s' is untouched. Press 'r' to resume.",
+					instance.Path,
 				)),
 		))
 		return nil

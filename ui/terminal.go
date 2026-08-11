@@ -127,20 +127,20 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 		return nil
 	}
 
-	worktreePath := instance.GetWorktreePath()
+	worktreePath := instance.Path
 	if worktreePath == "" {
 		return nil
 	}
 
-	t.currentTitle = instance.Title
+	t.currentTitle = instance.ID()
 
 	// Check if we already have a cached session for this instance
-	if s, ok := t.sessions[instance.Title]; ok {
+	if s, ok := t.sessions[instance.ID()]; ok {
 		if s.tmuxSession != nil && s.tmuxSession.DoesSessionExist() {
 			return nil
 		}
 		// Session died, remove stale entry and recreate below
-		delete(t.sessions, instance.Title)
+		delete(t.sessions, instance.ID())
 	}
 
 	shell := os.Getenv("SHELL")
@@ -148,7 +148,7 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 		shell = "/bin/sh"
 	}
 
-	termName := "term_" + instance.Title
+	termName := "term_" + instance.ID()
 	ts := tmux.NewTmuxSession(termName, shell)
 
 	// Check if session already exists (e.g. from a previous run)
@@ -167,7 +167,7 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 		}
 	}
 
-	t.sessions[instance.Title] = &terminalSession{
+	t.sessions[instance.ID()] = &terminalSession{
 		tmuxSession:  ts,
 		worktreePath: worktreePath,
 	}

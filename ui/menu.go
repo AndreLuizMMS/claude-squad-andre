@@ -130,12 +130,19 @@ func (m *Menu) addInstanceOptions() {
 	// Instance management group
 	options := []keys.KeyName{keys.KeyNew, keys.KeyKill}
 
-	// Action group
-	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
+	// A session that lost its directory can only be killed.
+	if m.instance.Orphaned() {
+		m.options = append(options, keys.KeyTab, keys.KeyHelp, keys.KeyQuit)
+		return
+	}
+
+	// Action group. Versioning is entirely the developer's business, so nothing
+	// here touches git.
+	actionGroup := []keys.KeyName{keys.KeyEnter}
 	if m.instance.Status == session.Paused {
 		actionGroup = append(actionGroup, keys.KeyResume)
 	} else {
-		actionGroup = append(actionGroup, keys.KeyCheckout)
+		actionGroup = append(actionGroup, keys.KeyPause)
 	}
 
 	// Navigation group (when in diff tab)
