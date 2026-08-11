@@ -35,16 +35,16 @@ func TestMenuOffersNoGitActions(t *testing.T) {
 	assert.NotContains(t, rendered, "push", "versioning is the developer's business")
 	assert.NotContains(t, rendered, "checkout")
 	assert.NotContains(t, rendered, "branch")
-	assert.Contains(t, rendered, "pause", "closing the terminal is still offered")
+	assert.Contains(t, rendered, "pausar", "closing the terminal is still offered")
 }
 
 func TestMenuForOrphanedSessionOnlyOffersKill(t *testing.T) {
 	m := newMenuFor(t, session.Orphaned)
 	rendered := m.String()
 
-	assert.Contains(t, rendered, "kill")
-	assert.NotContains(t, rendered, "pause")
-	assert.NotContains(t, rendered, "resume")
+	assert.Contains(t, rendered, "encerrar")
+	assert.NotContains(t, rendered, "pausar")
+	assert.NotContains(t, rendered, "retomar")
 }
 
 func TestDiffPaneSaysThereIsNoComparisonBase(t *testing.T) {
@@ -101,7 +101,7 @@ func TestListShowsModeDirectoryAndOrphanState(t *testing.T) {
 
 	inst.SetStatus(session.Orphaned)
 	rendered := l.String()
-	assert.Contains(t, rendered, "missing:", "the lost path explains the orphan state")
+	assert.Contains(t, rendered, "ausente:", "the lost path explains the orphan state")
 	assert.Contains(t, rendered, orphanedIcon)
 }
 

@@ -457,9 +457,9 @@ func TestConfirmationModalVisualAppearance(t *testing.T) {
 
 	// Test that it includes the message content and instructions
 	assert.Contains(t, rendered, "Delete everything?")
-	assert.Contains(t, rendered, "Press")
-	assert.Contains(t, rendered, "to confirm")
-	assert.Contains(t, rendered, "to cancel")
+	assert.Contains(t, rendered, "Pressione")
+	assert.Contains(t, rendered, "confirmar")
+	assert.Contains(t, rendered, "cancelar")
 
 	// Test that the danger indicator is preserved
 	assert.Contains(t, rendered, "[!")

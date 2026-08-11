@@ -161,11 +161,13 @@ func TestTerminalFallbackStates(t *testing.T) {
 		err := tp.UpdateContent(nil)
 		require.NoError(t, err)
 
+		// Released with defer: a failed require aborts the subtest on the spot,
+		// and a lock left behind here deadlocks every subtest after it.
 		tp.mu.Lock()
+		defer tp.mu.Unlock()
 		require.True(t, tp.fallback, "should be in fallback mode for nil instance")
 		require.Contains(t, tp.fallbackText, "Selecione uma sessão", "fallback text should prompt to select instance")
 		require.Empty(t, tp.content, "content should be empty in fallback mode")
-		tp.mu.Unlock()
 	})
 
 	t.Run("paused instance", func(t *testing.T) {
@@ -183,9 +185,9 @@ func TestTerminalFallbackStates(t *testing.T) {
 		require.NoError(t, err)
 
 		tp.mu.Lock()
+		defer tp.mu.Unlock()
 		require.True(t, tp.fallback, "should be in fallback mode for paused instance")
-		require.Contains(t, tp.fallbackText, "paused", "fallback text should mention paused")
-		tp.mu.Unlock()
+		require.Contains(t, tp.fallbackText, "pausada", "fallback text should mention paused")
 	})
 
 	t.Run("not started instance", func(t *testing.T) {
@@ -201,9 +203,9 @@ func TestTerminalFallbackStates(t *testing.T) {
 		require.NoError(t, err)
 
 		tp.mu.Lock()
+		defer tp.mu.Unlock()
 		require.True(t, tp.fallback, "should be in fallback mode for not-started instance")
-		require.Contains(t, tp.fallbackText, "not started", "fallback text should indicate not started")
-		tp.mu.Unlock()
+		require.Contains(t, tp.fallbackText, "não foi iniciada", "fallback text should indicate not started")
 	})
 }
 
