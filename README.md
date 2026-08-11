@@ -20,6 +20,10 @@ Outras adições:
 
 - **Renomear** sessão já criada (`R`) e **abrir a pasta no editor** (`e`, padrão `cursor`).
 - **Configuração** de editor, limite de sessões e som de aviso.
+- **Pedido de aprovação** tem marcador próprio (`⏵ APROVAR`): agente parado numa pergunta bloqueia, resposta pronta só espera.
+- **Agente que cai** vira estado próprio (`✖`) em vez de continuar com a bolinha verde; `r` sobe de novo retomando a conversa.
+- **Notificação do sistema** quando o agente devolve a vez, nomeando a sessão — o som não resolve com o terminal em outra área de trabalho.
+- Lista **agrupada por projeto** quando há sessões em diretórios diferentes.
 - Aviso sonoro toca **só quando o agente devolve a vez**. Roda do mouse rola o histórico da sessão; **Shift+arraste** seleciona texto pra copiar.
 - Encerrar uma sessão não reinicia as outras; registro corrompido não derruba a carga.
 - Sessão sem terminal volta **pausada** e retoma a conversa anterior em vez de começar do zero.
@@ -50,10 +54,11 @@ Fluxo: `n` cria a sessão (pede título, diretório — com autocomplete — e a
 |---|---|
 | `n` / `N` | Criar sessão / criar já com prompt |
 | `↵` `o` / `ctrl-l` | Entrar na sessão / voltar para a lista |
-| `c` / `r` / `D` | Pausar / retomar / encerrar |
+| `c` / `r` / `D` | Pausar / retomar (ou subir agente caído) / encerrar |
 | `R` / `e` | Renomear / abrir diretório no editor |
+| `espaço` / `p` | Pular para a próxima sessão que respondeu / mandar prompt sem entrar |
 | `↑↓` `jk` / `J` `K` | Navegar / reordenar |
-| `tab` / `shift-↑↓` | Trocar de aba / rolar a aba |
+| `tab` / `shift-↑↓` | Trocar entre prévia e terminal / rolar a aba |
 | `?` / `q` | Ajuda / sair |
 
 ## Configuração
@@ -64,6 +69,7 @@ Fluxo: `n` cria a sessão (pede título, diretório — com autocomplete — e a
 {
   "default_program": "claude",
   "disable_bell": false,
+  "disable_notify": false,
   "editor_command": "cursor",
   "max_sessions": 10,
   "profiles": [
@@ -77,6 +83,8 @@ Fluxo: `n` cria a sessão (pede título, diretório — com autocomplete — e a
 |---|---|
 | `default_program` | Agente usado ao criar sessões |
 | `disable_bell` | `true` desliga o som de quando o agente devolve a vez |
+| `disable_notify` | `true` desliga a notificação do sistema |
+| `notify_command` | Comando da notificação. Recebe título e texto como últimos argumentos. Vazio: detecta `notify-send`, `wsl-notify-send.exe` ou `osascript` |
 | `editor_command` | Comando da tecla `e`. Vazio: `$VISUAL`, depois `$EDITOR`, depois `cursor` |
 | `max_sessions` | Quantas sessões cabem ao mesmo tempo (padrão 10) |
 | `profiles` | Agentes oferecidos na criação de sessão |
