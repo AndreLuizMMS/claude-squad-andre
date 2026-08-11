@@ -22,8 +22,6 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-const GlobalInstanceLimit = 10
-
 // Run is the main entrypoint into the application. It can be launched from
 // anywhere: each session carries its own working directory.
 func Run(ctx context.Context, program string, autoYes bool) error {
@@ -48,6 +46,8 @@ const (
 	stateHelp
 	// stateConfirm is the state when a confirmation modal is displayed.
 	stateConfirm
+	// stateRename is the state when an existing session is being renamed.
+	stateRename
 )
 
 // newInstanceField is which field of the new-session form has focus. The form
@@ -104,6 +104,14 @@ type home struct {
 	// armed marks sessions that worked long enough that finishing is worth
 	// announcing.
 	armed map[string]bool
+	// metaTicks counts rounds of background observation, used to space out the
+	// expensive diff reads — see diffEveryNTicks.
+	metaTicks int
+	// diffDirty asks the next observation round to read every diff, regardless of
+	// the periodic schedule. Set when the selection moves: the newly selected
+	// session needs the full diff content the pane renders, and waiting for the
+	// next scheduled read would leave the pane blank.
+	diffDirty bool
 
 	// winWidth/winHeight are the last known dimensions of the whole terminal.
 	// Attaching hands the agent the entire window, so we need them.
@@ -111,12 +119,6 @@ type home struct {
 
 	// keySent is used to manage underlining menu items
 	keySent bool
-
-	// instanceStarting is true while a background instance start is in progress.
-	// Prevents double-submission and guards against interacting with a not-yet-started instance.
-	instanceStarting bool
-	// startingInstance holds a reference to the instance being started in the background.
-	startingInstance *session.Instance
 
 	// -- UI Components --
 
@@ -170,14 +172,13 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	h.list = ui.NewList(&h.spinner, autoYes)
 
 	// Load saved instances. A record we cannot read must not stop the coordinator
-	// from opening — it opens with an empty list, keeps the file untouched, and
-	// reports the problem.
+	// from opening — whatever could be restored is listed, the stored file is kept
+	// untouched, and the problem is reported once the UI is up.
 	instances, err := storage.LoadInstances()
 	if err != nil {
 		log.ErrorLog.Printf("failed to load instances: %v", err)
 		config.BackupStateFile()
 		h.loadErr = err
-		instances = nil
 	}
 
 	// Add loaded instances to the list
@@ -232,7 +233,7 @@ func (m *home) Init() tea.Cmd {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
 		},
-		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
+		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance(), true),
 	}
 	if m.loadErr != nil {
 		err := m.loadErr
@@ -258,35 +259,11 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case keyupMsg:
 		m.menu.ClearKeydown()
 		return m, nil
-	case instanceStartDoneMsg:
-		m.instanceStarting = false
-		inst := msg.instance
-		m.startingInstance = nil
-
-		if msg.err != nil {
-			// Start failed — remove the instance from the list and show the error.
-			m.list.Kill()
-			return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), m.handleError(msg.err))
-		}
-
-		// Save after successful start.
-		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
-			return m, m.handleError(err)
-		}
-
-		if m.promptAfterName {
-			m.state = statePrompt
-			m.menu.SetState(ui.StatePrompt)
-			m.textInputOverlay = overlay.NewTextInputOverlay("Digite o prompt", "")
-			m.promptAfterName = false
-		} else {
-			m.showHelpScreen(helpStart(inst), nil)
-		}
-
-		return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 	case metadataUpdateDoneMsg:
 		finished := m.applyMetadataResults(msg.results)
-		next := tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance())
+		m.metaTicks++
+		next := tickUpdateMetadataCmd(
+			m.snapshotActiveInstances(), m.list.GetSelectedInstance(), m.forceDiffRead())
 		if finished && !m.appConfig.DisableBell {
 			return m, tea.Batch(next, ringBell())
 		}
@@ -376,7 +353,8 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm ||
+		m.state == stateRename {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -679,6 +657,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	if m.state == stateRename {
+		return m.handleRenameState(msg)
+	}
+
 	// Handle confirmation state
 	if m.state == stateConfirm {
 		shouldClose := m.confirmationOverlay.HandleKeyPress(msg)
@@ -725,9 +707,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyPrompt:
-		if m.list.NumInstances() >= GlobalInstanceLimit {
+		if limit := m.appConfig.GetMaxSessions(); m.list.NumInstances() >= limit {
 			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				fmt.Errorf("limite de %d sessões atingido — ajuste max_sessions na configuração", limit))
 		}
 
 		instance, err := m.newBlankInstance()
@@ -739,9 +721,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.promptAfterName = true
 		return m, nil
 	case keys.KeyNew:
-		if m.list.NumInstances() >= GlobalInstanceLimit {
+		if limit := m.appConfig.GetMaxSessions(); m.list.NumInstances() >= limit {
 			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				fmt.Errorf("limite de %d sessões atingido — ajuste max_sessions na configuração", limit))
 		}
 		instance, err := m.newBlankInstance()
 		if err != nil {
@@ -752,9 +734,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	case keys.KeyUp:
 		m.list.Up()
+		m.diffDirty = true
 		return m, m.instanceChanged()
 	case keys.KeyDown:
 		m.list.Down()
+		m.diffDirty = true
 		return m, m.instanceChanged()
 	case keys.KeyShiftUp:
 		m.tabbedWindow.ScrollUp()
@@ -823,12 +807,25 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.handleError(fmt.Errorf(
 				"a sessão '%s' perdeu seu diretório", selected.Title))
 		}
-		cmd := exec.Command("cursor", selected.Path)
+		editor := m.appConfig.GetEditorCommand()
+		if _, err := exec.LookPath(editor[0]); err != nil {
+			return m, m.handleError(fmt.Errorf(
+				"editor '%s' não encontrado — ajuste editor_command na configuração", editor[0]))
+		}
+		cmd := exec.Command(editor[0], append(editor[1:], selected.Path)...)
 		if err := cmd.Start(); err != nil {
-			return m, m.handleError(fmt.Errorf("não foi possível abrir o cursor: %w", err))
+			return m, m.handleError(fmt.Errorf("não foi possível abrir o editor: %w", err))
 		}
 		go func() { _ = cmd.Wait() }()
 		return m, nil
+	case keys.KeyRename:
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || selected.Status == session.Loading {
+			return m, nil
+		}
+		m.state = stateRename
+		m.textInputOverlay = overlay.NewTextInputOverlay("Novo nome da sessão", selected.Title)
+		return m, tea.WindowSize()
 	case keys.KeyMoveUp:
 		if m.list.MoveUp() {
 			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
@@ -921,6 +918,48 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	}
 }
 
+// handleRenameState drives the overlay that renames a session already in the
+// list. Only the label changes: the terminal, the directory and the stored
+// identity stay exactly as they are.
+func (m *home) handleRenameState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" {
+		return m, m.closeRenameOverlay()
+	}
+	if !m.textInputOverlay.HandleKeyPress(msg) {
+		return m, nil
+	}
+
+	if m.textInputOverlay.IsCanceled() {
+		return m, m.closeRenameOverlay()
+	}
+
+	name := strings.TrimSpace(m.textInputOverlay.GetValue())
+	selected := m.list.GetSelectedInstance()
+	if selected == nil {
+		return m, m.closeRenameOverlay()
+	}
+	if err := selected.SetTitle(name); err != nil {
+		return m, tea.Batch(m.closeRenameOverlay(), m.handleError(err))
+	}
+	if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+		return m, tea.Batch(m.closeRenameOverlay(), m.handleError(err))
+	}
+	return m, tea.Batch(m.closeRenameOverlay(), m.instanceChanged())
+}
+
+// closeRenameOverlay drops the rename overlay and returns to the list.
+func (m *home) closeRenameOverlay() tea.Cmd {
+	m.textInputOverlay = nil
+	m.state = stateDefault
+	return tea.Sequence(
+		tea.WindowSize(),
+		func() tea.Msg {
+			m.menu.SetState(ui.StateDefault)
+			return nil
+		},
+	)
+}
+
 // restorePreviewSize re-applies the preview dimensions to every session's
 // terminal. Called after detaching, when the attached session was resized to the
 // full window and would otherwise render at the wrong shape inside the pane.
@@ -993,6 +1032,9 @@ func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool
 			m.busyTicks[id] = 0
 		}
 
+		if !r.diffRead {
+			continue
+		}
 		if r.diffStats != nil && r.diffStats.Error != nil {
 			if !strings.Contains(r.diffStats.Error.Error(), "base commit SHA not set") {
 				log.WarningLog.Printf("could not update diff stats: %v", r.diffStats.Error)
@@ -1073,26 +1115,15 @@ type instanceMetaResult struct {
 	diffStats *git.DiffStats
 	// dirMissing is true when the session's working directory no longer exists.
 	dirMissing bool
+	// diffRead is true when this round actually read the diff. When false, the
+	// previous numbers stay on screen instead of being wiped by a read that
+	// never happened.
+	diffRead bool
 }
 
 // metadataUpdateDoneMsg is sent when the background metadata update completes.
 type metadataUpdateDoneMsg struct {
 	results []instanceMetaResult
-}
-
-// instanceStartDoneMsg is sent when the background instance start completes.
-type instanceStartDoneMsg struct {
-	instance *session.Instance
-	err      error
-}
-
-// runInstanceStartCmd returns a Cmd that performs the expensive instance.Start(true)
-// in a background goroutine so the main event loop stays responsive.
-func runInstanceStartCmd(instance *session.Instance) tea.Cmd {
-	return func() tea.Msg {
-		err := instance.Start(true)
-		return instanceStartDoneMsg{instance: instance, err: err}
-	}
 }
 
 // snapshotActiveInstances returns the currently active (started, not paused)
@@ -1117,7 +1148,13 @@ func (m *home) snapshotActiveInstances() []*session.Instance {
 // Only the selected instance gets a full diff (with Content); the rest get a
 // lightweight numstat-only summary. This keeps per-instance memory bounded
 // since the diff pane only ever renders the selected one.
-func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instance) tea.Cmd {
+//
+// The diff is read only when the session's terminal changed or when forceDiff
+// says the periodic refresh is due. Reading it every round means running git
+// over the whole working directory twice a second per session, which costs
+// real CPU on a large repository and tells us nothing new while the agent is
+// idle.
+func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instance, forceDiff bool) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(500 * time.Millisecond)
 
@@ -1139,6 +1176,10 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 					return
 				}
 				r.updated, r.hasPrompt = instance.HasUpdated()
+				if !r.updated && !forceDiff {
+					return
+				}
+				r.diffRead = true
 				if instance == selected {
 					r.diffStats = instance.ComputeDiff()
 				} else {
@@ -1150,6 +1191,22 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 
 		return metadataUpdateDoneMsg{results: results}
 	}
+}
+
+// diffEveryNTicks is how many observation rounds pass between diff reads of an
+// idle session. At 500ms a round, an untouched session is re-read every 2s.
+const diffEveryNTicks = 4
+
+// forceDiffRead reports whether this round should read the diff of every
+// session, including the ones whose terminal did not change. Edits made outside
+// the agent are invisible to the terminal watcher, so the counters would
+// otherwise go stale.
+func (m *home) forceDiffRead() bool {
+	if m.diffDirty {
+		m.diffDirty = false
+		return true
+	}
+	return m.metaTicks%diffEveryNTicks == 0
 }
 
 // handleError handles all errors which get bubbled up to the app. sets the error message. We return a callback tea.Cmd that returns a hideErrMsg message
@@ -1225,7 +1282,7 @@ func (m *home) View() string {
 		m.errBox.String(),
 	)
 
-	if m.state == statePrompt {
+	if m.state == statePrompt || m.state == stateRename {
 		if m.textInputOverlay == nil {
 			log.ErrorLog.Printf("text input overlay is nil")
 		}

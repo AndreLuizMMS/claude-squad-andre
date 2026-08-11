@@ -2,6 +2,7 @@ package app
 
 import (
 	"claude-squad/session"
+	"claude-squad/session/git"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -97,4 +98,39 @@ func TestAnOrphanedSessionNeverRings(t *testing.T) {
 	finished := h.applyMetadataResults([]instanceMetaResult{{instance: inst, dirMissing: true}})
 	assert.False(t, finished, "losing the directory is not an answer")
 	assert.Equal(t, session.Orphaned, inst.Status)
+}
+
+// TestIdleSessionsAreNotDiffedEveryRound guards the throttle: reading the diff
+// twice a second per session costs real CPU on a large repository and says
+// nothing new while the agent sits still.
+func TestDiffIsReadOnScheduleAndOnSelectionChange(t *testing.T) {
+	h := newTestHome(t)
+
+	assert.True(t, h.forceDiffRead(), "the first round reads everything")
+	for i := 1; i < diffEveryNTicks; i++ {
+		h.metaTicks = i
+		assert.False(t, h.forceDiffRead(), "idle round %d skips the diff", i)
+	}
+	h.metaTicks = diffEveryNTicks
+	assert.True(t, h.forceDiffRead(), "the periodic refresh still happens")
+
+	// Moving the selection needs the full diff right away — the pane renders it.
+	h.metaTicks = 1
+	h.diffDirty = true
+	assert.True(t, h.forceDiffRead(), "a new selection is read immediately")
+	assert.False(t, h.forceDiffRead(), "and only once")
+}
+
+// TestSkippedDiffKeepsThePreviousNumbers: a round that did not read the diff
+// must not wipe the counters shown in the list.
+func TestSkippedDiffKeepsThePreviousNumbers(t *testing.T) {
+	h := newTestHome(t)
+	inst := startedInstance(t, "counted")
+
+	stats := &git.DiffStats{Added: 7, Removed: 2}
+	h.applyMetadataResults([]instanceMetaResult{{instance: inst, diffRead: true, diffStats: stats}})
+	require.Equal(t, stats, inst.GetDiffStats())
+
+	h.applyMetadataResults([]instanceMetaResult{{instance: inst}})
+	assert.Equal(t, stats, inst.GetDiffStats(), "a skipped read leaves the numbers alone")
 }
