@@ -416,23 +416,31 @@ func TestDeleteInstanceDoesNotReviveTheOthers(t *testing.T) {
 	assert.ErrorContains(t, storage.DeleteInstance("nope"), "not found")
 }
 
-func TestOneUnreadableRecordDoesNotHideTheOthers(t *testing.T) {
-	good := t.TempDir()
-	// The first record is running, so loading it reopens a terminal — which fails
-	// here because tmux cannot be found. The paused one next to it opens no
-	// terminal and must still show up in the list.
+func TestASessionThatLostItsTerminalComesBackPaused(t *testing.T) {
+	dir := t.TempDir()
+	// The record says the session was running, but the machine was rebooted and
+	// the terminal is gone. It must come back paused — resumable — instead of
+	// failing on every read of a terminal that no longer exists.
 	t.Setenv("PATH", "")
 	state := &memState{data: json.RawMessage(`[
-		{"title":"broken","path":"` + good + `","status":0,"program":"bash","session_id":"broken-1"},
-		{"title":"good","path":"` + good + `","status":3,"program":"bash","session_id":"good-1"}
+		{"title":"rebooted","path":"` + dir + `","status":0,"program":"bash","session_id":"rebooted-1"},
+		{"title":"paused","path":"` + dir + `","status":3,"program":"bash","session_id":"paused-1"}
 	]`)}
 	storage, err := NewStorage(state)
 	require.NoError(t, err)
 
 	instances, err := storage.LoadInstances()
-	assert.ErrorContains(t, err, "broken")
-	require.Len(t, instances, 1)
-	assert.Equal(t, "good-1", instances[0].ID())
+	require.NoError(t, err)
+	require.Len(t, instances, 2)
+	assert.True(t, instances[0].Paused(), "the rebooted session is resumable")
+	assert.True(t, instances[1].Paused())
+}
+
+func TestResumeContinuesThePreviousChatOnlyForClaude(t *testing.T) {
+	assert.Equal(t, "claude --continue || claude", resumeCommand("claude"))
+	assert.Equal(t, "/usr/bin/claude -x --continue || /usr/bin/claude -x", resumeCommand("/usr/bin/claude -x"))
+	assert.Equal(t, "claude --continue", resumeCommand("claude --continue"))
+	assert.Equal(t, "aider --model gemma", resumeCommand("aider --model gemma"))
 }
 
 func TestRenamingAStartedSessionKeepsItsIdentity(t *testing.T) {

@@ -125,13 +125,19 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		return instance, nil
 	}
 
-	if instance.Paused() {
+	instance.tmuxSession = tmux.NewTmuxSession(instance.ID(), instance.Program)
+
+	// A reboot (or any kill of the tmux server) takes the terminal down while the
+	// record survives. There is nothing to reattach to, so the session comes back
+	// paused instead of half-alive: it can be resumed in place.
+	if instance.Paused() || !instance.tmuxSession.DoesSessionExist() {
 		instance.started = true
-		instance.tmuxSession = tmux.NewTmuxSession(instance.ID(), instance.Program)
-	} else {
-		if err := instance.Start(false); err != nil {
-			return nil, err
-		}
+		instance.SetStatus(Paused)
+		return instance, nil
+	}
+
+	if err := instance.Start(false); err != nil {
+		return nil, err
 	}
 
 	return instance, nil
@@ -526,6 +532,7 @@ func (i *Instance) Resume() error {
 		return fmt.Errorf("working directory no longer exists: %s", i.Path)
 	}
 
+	i.tmuxSession = tmux.NewTmuxSession(i.ID(), resumeCommand(i.Program))
 	if err := i.tmuxSession.Start(i.Path); err != nil {
 		log.ErrorLog.Print(err)
 		return fmt.Errorf("failed to start new session: %w", err)
@@ -533,6 +540,21 @@ func (i *Instance) Resume() error {
 
 	i.SetStatus(Running)
 	return nil
+}
+
+// resumeCommand picks up the previous conversation when the agent supports it,
+// falling back to a fresh run when there is nothing to pick up.
+// ponytail: --continue takes the newest conversation of the directory; two
+// sessions sharing one directory can pick up each other's chat.
+func resumeCommand(program string) string {
+	fields := strings.Fields(program)
+	if len(fields) == 0 || !strings.HasSuffix(fields[0], tmux.ProgramClaude) {
+		return program
+	}
+	if strings.Contains(program, "--continue") || strings.Contains(program, "--resume") {
+		return program
+	}
+	return fmt.Sprintf("%s --continue || %s", program, program)
 }
 
 // UpdateDiffStats refreshes the uncommitted changes present in the working
