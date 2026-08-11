@@ -45,6 +45,14 @@ type Config struct {
 	// working and hands the turn back. Off by default, so the sound is on for
 	// configurations written before this option existed.
 	DisableBell bool `json:"disable_bell,omitempty"`
+	// DisableNotify turns off the desktop notification raised when an agent
+	// hands the turn back. Off by default: the bell is not enough when the
+	// terminal is in another workspace.
+	DisableNotify bool `json:"disable_notify,omitempty"`
+	// NotifyCommand overrides how the desktop notification is raised. The
+	// program receives the title and the body as its last two arguments. Empty
+	// picks the notifier the machine already has.
+	NotifyCommand string `json:"notify_command,omitempty"`
 	// EditorCommand opens the working directory of a session. Empty falls back to
 	// $VISUAL, then $EDITOR, then the default below.
 	EditorCommand string `json:"editor_command,omitempty"`
