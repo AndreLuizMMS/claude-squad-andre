@@ -453,11 +453,20 @@ func (i *Instance) Started() bool {
 	return i.started
 }
 
-// SetTitle sets the title of the instance. Returns an error if the instance has started.
-// We cant change the title once it's been used for a tmux session etc.
+// SetTitle sets the title of the instance. A running session can be renamed as
+// long as it has an explicit identity: the terminal is named after the
+// SessionID, so the title is only a label. Records written before identities
+// existed still key everything off the title and cannot be renamed.
 func (i *Instance) SetTitle(title string) error {
+	// Not trimmed: during creation the title is typed one key at a time, and a
+	// trailing space is the developer in the middle of a word.
 	if i.started {
-		return fmt.Errorf("cannot change title of a started instance")
+		if i.SessionID == "" {
+			return fmt.Errorf("sessão antiga sem identidade própria não pode ser renomeada")
+		}
+		if strings.TrimSpace(title) == "" {
+			return fmt.Errorf("o nome não pode ficar vazio")
+		}
 	}
 	i.Title = title
 	return nil

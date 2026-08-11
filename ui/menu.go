@@ -128,7 +128,7 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// Instance management group
-	options := []keys.KeyName{keys.KeyNew, keys.KeyKill}
+	options := []keys.KeyName{keys.KeyNew, keys.KeyKill, keys.KeyRename}
 
 	// A session that lost its directory can only be killed.
 	if m.instance.Orphaned() {
