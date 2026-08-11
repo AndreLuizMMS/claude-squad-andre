@@ -165,7 +165,7 @@ func TestDismissedHelpStillRedraws(t *testing.T) {
 	h.appState = &fakeAppState{}
 
 	ran := false
-	_, _ = h.showHelpScreen(helpTypeInstanceAttach{}, func() { ran = true })
+	_, _ = h.showHelpScreen(helpTypeInstanceInteract{}, func() { ran = true })
 	require.False(t, ran, "first time the overlay is shown; the callback waits for dismissal")
 	require.Equal(t, stateHelp, h.state)
 
@@ -173,7 +173,7 @@ func TestDismissedHelpStillRedraws(t *testing.T) {
 	require.NoError(t, h.appState.SetHelpScreensSeen(^uint32(0)))
 
 	ran = false
-	_, cmd := h.showHelpScreen(helpTypeInstanceAttach{}, func() { ran = true })
+	_, cmd := h.showHelpScreen(helpTypeInstanceInteract{}, func() { ran = true })
 	assert.True(t, ran, "the callback still runs when the overlay is skipped")
 	require.NotNil(t, cmd, "skipping the overlay must still request a redraw")
 	assert.NotNil(t, cmd(), "the command produces a resize message")
