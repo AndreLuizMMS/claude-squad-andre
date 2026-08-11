@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -461,4 +462,33 @@ func TestRenamingAStartedSessionKeepsItsIdentity(t *testing.T) {
 	// A record from before identities existed keys everything off the title.
 	legacy := &Instance{Title: "legado", Path: dir, started: true}
 	assert.ErrorContains(t, legacy.SetTitle("novo"), "não pode ser renomeada")
+}
+
+func TestComputeUsageReadsLastAssistantUsageFromNewestTranscript(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	workDir := "/home/dev/my-project"
+	projectDir := filepath.Join(home, ".claude", "projects", claudeProjectDirName(workDir))
+	require.NoError(t, os.MkdirAll(projectDir, 0755))
+	assert.Equal(t, "-home-dev-my-project", claudeProjectDirName(workDir))
+
+	// An older transcript with a smaller usage the newer one should shadow.
+	older := filepath.Join(projectDir, "older.jsonl")
+	require.NoError(t, os.WriteFile(older, []byte(`{"type":"assistant","message":{"usage":{"input_tokens":1,"cache_read_input_tokens":1000}}}`+"\n"), 0644))
+	require.NoError(t, os.Chtimes(older, time.Now().Add(-time.Hour), time.Now().Add(-time.Hour)))
+
+	newer := filepath.Join(projectDir, "newer.jsonl")
+	lines := strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"oi"}}`,
+		`{"type":"assistant","message":{"usage":{"input_tokens":100,"cache_creation_input_tokens":2000,"cache_read_input_tokens":18000}}}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(newer, []byte(lines), 0644))
+
+	usage := computeUsageFromTranscripts(workDir)
+	require.NotNil(t, usage)
+	// (100 + 2000 + 18000) / 200_000 = 10%
+	assert.Equal(t, 10, usage.Percent)
+
+	assert.Nil(t, computeUsageFromTranscripts("/no/such/project"))
 }

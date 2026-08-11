@@ -1059,6 +1059,7 @@ func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool
 		} else {
 			r.instance.SetDiffStats(r.diffStats)
 		}
+		r.instance.SetUsageStats(r.usageStats)
 	}
 	return finished
 }
@@ -1129,8 +1130,9 @@ type instanceMetaResult struct {
 	updated   bool
 	hasPrompt bool
 	// busy is true while the agent itself reports a turn in flight.
-	busy      bool
-	diffStats *git.DiffStats
+	busy       bool
+	diffStats  *git.DiffStats
+	usageStats *session.UsageStats
 	// dirMissing is true when the session's working directory no longer exists.
 	dirMissing bool
 	// diffRead is true when this round actually read the diff. When false, the
@@ -1203,6 +1205,7 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				} else {
 					r.diffStats = instance.ComputeDiffNumstat()
 				}
+				r.usageStats = instance.ComputeUsage()
 			}(idx, inst)
 		}
 		wg.Wait()

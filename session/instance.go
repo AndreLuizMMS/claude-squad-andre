@@ -5,6 +5,8 @@ import (
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
 	"crypto/sha256"
+	"encoding/json"
+	"io"
 	"path/filepath"
 
 	"fmt"
@@ -63,6 +65,10 @@ type Instance struct {
 
 	// diffStats stores the current diff statistics for the working directory.
 	diffStats *git.DiffStats
+
+	// usageStats stores the most recently read context-window usage for the
+	// Claude Code session running in this instance.
+	usageStats *UsageStats
 
 	// The below fields are initialized upon calling Start().
 
@@ -608,6 +614,155 @@ func (i *Instance) SetDiffStats(stats *git.DiffStats) {
 // GetDiffStats returns the current diff statistics
 func (i *Instance) GetDiffStats() *git.DiffStats {
 	return i.diffStats
+}
+
+// claudeContextWindow is the token budget /status measures usage against.
+// Claude Code sessions run on the 200k-token model tier.
+const claudeContextWindow = 200_000
+
+// usageTailBytes bounds how much of a transcript file we read to find the
+// latest usage line, so a long-running session's multi-MB transcript doesn't
+// get read in full on every poll.
+const usageTailBytes = 64 * 1024
+
+// UsageStats is the context-window usage of the Claude Code session running
+// in an instance, read from its transcript file — the same numbers /status
+// reports inside the interactive session.
+type UsageStats struct {
+	// Percent is how full the context window is, 0-100.
+	Percent int
+}
+
+// tokenUsage is the usage field of a Claude Code transcript assistant
+// message.
+type tokenUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+}
+
+// transcriptLine is the subset of a Claude Code transcript JSONL line we
+// care about. Only assistant messages carry a usage field.
+type transcriptLine struct {
+	Message struct {
+		Usage *tokenUsage `json:"usage"`
+	} `json:"message"`
+}
+
+// ComputeUsage reads the instance's most recent Claude Code transcript and
+// returns its current context-window usage. Returns nil if the instance
+// isn't running or no transcript is found yet. Safe to call from a
+// background goroutine.
+func (i *Instance) ComputeUsage() *UsageStats {
+	if !i.started || i.Status == Paused || i.Status == Orphaned {
+		return nil
+	}
+	return computeUsageFromTranscripts(i.Path)
+}
+
+// SetUsageStats sets the usage statistics on the instance. Should be called
+// from the main event loop to avoid data races with View.
+func (i *Instance) SetUsageStats(stats *UsageStats) {
+	i.usageStats = stats
+}
+
+// GetUsageStats returns the current context-window usage statistics.
+func (i *Instance) GetUsageStats() *UsageStats {
+	return i.usageStats
+}
+
+// claudeProjectDirName mirrors Claude Code's own transcript-directory naming:
+// every '/' and '.' in the working directory path becomes '-'.
+func claudeProjectDirName(path string) string {
+	return strings.NewReplacer("/", "-", ".", "-").Replace(path)
+}
+
+// computeUsageFromTranscripts finds the most recently modified transcript for
+// workDir under ~/.claude/projects and returns the usage of its last
+// assistant message.
+func computeUsageFromTranscripts(workDir string) *UsageStats {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	projectDir := filepath.Join(home, ".claude", "projects", claudeProjectDirName(workDir))
+	entries, err := os.ReadDir(projectDir)
+	if err != nil {
+		return nil
+	}
+
+	var latest string
+	var latestMod time.Time
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(latestMod) {
+			latestMod = info.ModTime()
+			latest = filepath.Join(projectDir, e.Name())
+		}
+	}
+	if latest == "" {
+		return nil
+	}
+
+	usage := lastUsageInFile(latest)
+	if usage == nil {
+		return nil
+	}
+
+	total := usage.InputTokens + usage.CacheCreationInputTokens + usage.CacheReadInputTokens
+	percent := total * 100 / claudeContextWindow
+	if percent > 100 {
+		percent = 100
+	}
+	return &UsageStats{Percent: percent}
+}
+
+// lastUsageInFile scans the tail of a transcript file for the last line
+// carrying a usage field.
+func lastUsageInFile(path string) *tokenUsage {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	start := int64(0)
+	if info.Size() > usageTailBytes {
+		start = info.Size() - usageTailBytes
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return nil
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for idx := len(lines) - 1; idx >= 0; idx-- {
+		line := strings.TrimSpace(lines[idx])
+		if line == "" {
+			continue
+		}
+		var tl transcriptLine
+		if err := json.Unmarshal([]byte(line), &tl); err != nil {
+			continue
+		}
+		if tl.Message.Usage != nil {
+			return tl.Message.Usage
+		}
+	}
+	return nil
 }
 
 // SendPrompt sends a prompt to the tmux session
