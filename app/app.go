@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -813,6 +814,21 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			m.tabbedWindow.CleanupTerminalForInstance(selected.ID())
 			m.instanceChanged()
 		})
+	case keys.KeyOpenEditor:
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || selected.Status == session.Loading {
+			return m, nil
+		}
+		if selected.Orphaned() {
+			return m, m.handleError(fmt.Errorf(
+				"a sessão '%s' perdeu seu diretório", selected.Title))
+		}
+		cmd := exec.Command("cursor", selected.Path)
+		if err := cmd.Start(); err != nil {
+			return m, m.handleError(fmt.Errorf("não foi possível abrir o cursor: %w", err))
+		}
+		go func() { _ = cmd.Wait() }()
+		return m, nil
 	case keys.KeyMoveUp:
 		if m.list.MoveUp() {
 			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {

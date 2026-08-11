@@ -138,7 +138,7 @@ func (m *Menu) addInstanceOptions() {
 
 	// Action group. Versioning is entirely the developer's business, so nothing
 	// here touches git.
-	actionGroup := []keys.KeyName{keys.KeyEnter}
+	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeyOpenEditor}
 	if m.instance.Status == session.Paused {
 		actionGroup = append(actionGroup, keys.KeyResume)
 	} else {

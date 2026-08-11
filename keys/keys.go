@@ -29,6 +29,8 @@ const (
 	// Reorder keybindings
 	KeyMoveUp
 	KeyMoveDown
+
+	KeyOpenEditor // Open the session directory in Cursor
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -51,6 +53,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"c":          KeyPause,
 	"r":          KeyResume,
 	"?":          KeyHelp,
+	"e":          KeyOpenEditor,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -115,6 +118,11 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyMoveDown: key.NewBinding(
 		key.WithKeys("J"),
 		key.WithHelp("J", "mover p/ baixo"),
+	),
+
+	KeyOpenEditor: key.NewBinding(
+		key.WithKeys("e"),
+		key.WithHelp("e", "abrir no cursor"),
 	),
 
 	// -- Special keybindings --
