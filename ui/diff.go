@@ -2,6 +2,8 @@ package ui
 
 import (
 	"claude-squad/session"
+	"claude-squad/session/git"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -13,6 +15,8 @@ var (
 	AdditionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
 	DeletionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
 	HunkStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#0ea5e9"))
+
+	directNoticeStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#888888"})
 )
 
 type DiffPane struct {
@@ -46,7 +50,7 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		d.height,
 		lipgloss.Center,
 		lipgloss.Center,
-		"No changes",
+		"Sem alterações",
 	)
 
 	if instance == nil || !instance.Started() {
@@ -62,20 +66,25 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 			d.height,
 			lipgloss.Center,
 			lipgloss.Center,
-			"Setting up worktree...",
+			"Loading changes...",
 		)
 		d.viewport.SetContent(centeredMessage)
 		return
 	}
 
 	if stats.Error != nil {
-		// Show error message
+		// A directory with no version history is not an error — there is simply
+		// nothing to compare against.
+		message := fmt.Sprintf("Error: %v", stats.Error)
+		if errors.Is(stats.Error, git.ErrNoDiffBase) {
+			message = "No comparison base available (this directory is not versioned)"
+		}
 		centeredMessage := lipgloss.Place(
 			d.width,
 			d.height,
 			lipgloss.Center,
 			lipgloss.Center,
-			fmt.Sprintf("Error: %v", stats.Error),
+			message,
 		)
 		d.viewport.SetContent(centeredMessage)
 		return
@@ -89,6 +98,11 @@ func (d *DiffPane) SetDiff(instance *session.Instance) {
 		additions := AdditionStyle.Render(fmt.Sprintf("%d additions(+)", stats.Added))
 		deletions := DeletionStyle.Render(fmt.Sprintf("%d deletions(-)", stats.Removed))
 		d.stats = lipgloss.JoinHorizontal(lipgloss.Center, additions, " ", deletions)
+		// These changes are whatever is in the directory — not necessarily the
+		// agent's. Say so rather than implying authorship.
+		d.stats = lipgloss.JoinVertical(lipgloss.Left,
+			directNoticeStyle.Render("all uncommitted changes in this directory, from any source"),
+			d.stats)
 		d.diff = colorizeDiff(stats.Content)
 		d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
 	}

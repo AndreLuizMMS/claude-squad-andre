@@ -14,6 +14,11 @@ import (
 
 const readyIcon = "● "
 const pausedIcon = "⏸ "
+const orphanedIcon = "⚠ "
+
+// attentionBadge marks a session that answered while the developer was looking
+// somewhere else. It is meant to be impossible to miss in a list of agents.
+const attentionBadge = " ⬤ RESPONDEU "
 
 var readyStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#51bd73", Dark: "#51bd73"})
@@ -26,6 +31,18 @@ var removedLinesStyle = lipgloss.NewStyle().
 
 var pausedStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#888888"})
+
+var orphanedStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("#de613e"))
+
+var attentionBadgeStyle = lipgloss.NewStyle().
+	Bold(true).
+	Foreground(lipgloss.Color("#1a1a1a")).
+	Background(lipgloss.Color("#ffd23f"))
+
+var attentionTitleStyle = lipgloss.NewStyle().
+	Bold(true).
+	Foreground(lipgloss.Color("#ffd23f"))
 
 var titleStyle = lipgloss.NewStyle().
 	Padding(1, 1, 0, 1).
@@ -75,6 +92,12 @@ func NewList(spinner *spinner.Model, autoYes bool) *List {
 }
 
 // SetSize sets the height and width of the list.
+// SetNewInstanceHint sets the line shown under the session being created. Empty
+// clears it.
+func (l *List) SetNewInstanceHint(hint string) {
+	l.renderer.newInstanceHint = hint
+}
+
 func (l *List) SetSize(width, height int) {
 	l.width = width
 	l.height = height
@@ -105,14 +128,17 @@ func (l *List) NumInstances() int {
 type InstanceRenderer struct {
 	spinner *spinner.Model
 	width   int
+	// newInstanceHint is the creation-form line shown under a session that has
+	// not started yet.
+	newInstanceHint string
 }
 
 func (r *InstanceRenderer) setWidth(width int) {
 	r.width = AdjustPreviewWidth(width)
 }
 
-// ɹ and ɻ are other options.
-const branchIcon = "Ꮧ"
+// dirIcon marks the second line, which holds the session's working directory.
+const dirIcon = "▸"
 
 func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, hasMultipleRepos bool) string {
 	prefix := fmt.Sprintf(" %d. ", idx)
@@ -125,28 +151,42 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		titleS = titleStyle
 		descS = listDescStyle
 	}
-
-	// add spinner next to title if it's running
-	var join string
-	switch i.Status {
-	case session.Running, session.Loading:
-		join = fmt.Sprintf("%s ", r.spinner.View())
-	case session.Ready:
-		join = readyStyle.Render(readyIcon)
-	case session.Paused:
-		join = pausedStyle.Render(pausedIcon)
-	default:
+	if i.NeedsAttention && i.Status == session.Ready {
+		titleS = titleS.Foreground(attentionTitleStyle.GetForeground()).Bold(true)
 	}
 
-	// Cut the title if it's too long
+	// add spinner next to title if it's running. markerWidth is how many columns
+	// the marker occupies, so the title can be given the rest.
+	var join string
+	markerWidth := 2
+	switch {
+	case i.NeedsAttention && i.Status == session.Ready:
+		join = attentionBadgeStyle.Render(attentionBadge)
+		markerWidth = runewidth.StringWidth(attentionBadge)
+	case i.Status == session.Running, i.Status == session.Loading:
+		join = fmt.Sprintf("%s ", r.spinner.View())
+	case i.Status == session.Ready:
+		join = readyStyle.Render(readyIcon)
+	case i.Status == session.Paused:
+		join = pausedStyle.Render(pausedIcon)
+	case i.Status == session.Orphaned:
+		join = orphanedStyle.Render(orphanedIcon)
+	}
+
+	// Cut the title if it's too long. The marker takes its columns first: an
+	// alert nobody can read is not an alert.
+	titleArea := r.width - 1 - markerWidth
+	if titleArea < 1 {
+		titleArea = 1
+	}
 	titleText := i.Title
-	widthAvail := r.width - 3 - runewidth.StringWidth(prefix) - 1
+	widthAvail := titleArea - runewidth.StringWidth(prefix) - 1
 	if widthAvail > 0 && runewidth.StringWidth(titleText) > widthAvail {
-		titleText = runewidth.Truncate(titleText, widthAvail-3, "...")
+		titleText = runewidth.Truncate(titleText, widthAvail, "...")
 	}
 	title := titleS.Render(lipgloss.JoinHorizontal(
 		lipgloss.Left,
-		lipgloss.Place(r.width-3, 1, lipgloss.Left, lipgloss.Center, fmt.Sprintf("%s %s", prefix, titleText)),
+		lipgloss.Place(titleArea, 1, lipgloss.Left, lipgloss.Center, fmt.Sprintf("%s %s", prefix, titleText)),
 		" ",
 		join,
 	))
@@ -173,8 +213,8 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 
 	remainingWidth := r.width
 	remainingWidth -= runewidth.StringWidth(prefix)
-	remainingWidth -= runewidth.StringWidth(branchIcon)
-	remainingWidth -= 2 // for the literal " " and "-" in the branchLine format string
+	remainingWidth -= runewidth.StringWidth(dirIcon)
+	remainingWidth -= 2 // for the literal " " and "-" in the dirLine format string
 
 	diffWidth := runewidth.StringWidth(addedDiff) + runewidth.StringWidth(removedDiff)
 	if diffWidth > 0 {
@@ -184,28 +224,34 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	// Use fixed width for diff stats to avoid layout issues
 	remainingWidth -= diffWidth
 
-	branch := i.Branch
-	if i.Started() && hasMultipleRepos {
-		repoName, err := i.RepoName()
-		if err != nil {
-			log.ErrorLog.Printf("could not get repo name in instance renderer: %v", err)
-		} else {
-			branch += fmt.Sprintf(" (%s)", repoName)
-		}
+	// The second line is the working directory: it is what distinguishes one
+	// session from another when several agents run side by side.
+	subtitle := i.Path
+	if !i.Started() && r.newInstanceHint != "" {
+		// Session being created: the second line is the creation form.
+		subtitle = r.newInstanceHint
+	} else if i.Status == session.Orphaned {
+		// Show the path that went missing so the state explains itself.
+		subtitle = "ausente: " + i.Path
 	}
-	// Don't show branch if there's no space for it. Or show ellipsis if it's too long.
-	branchWidth := runewidth.StringWidth(branch)
-	if remainingWidth < 0 {
-		branch = ""
-	} else if remainingWidth < branchWidth {
+
+	// Don't show it if there's no space. Or show ellipsis if it's too long.
+	subtitleWidth := runewidth.StringWidth(subtitle)
+	if !i.Started() && r.newInstanceHint != "" {
+		// While typing a path, the tail is what matters — the segment being
+		// completed. Cut from the left instead of the right.
+		subtitle = truncateLeft(subtitle, remainingWidth)
+	} else if remainingWidth < 0 {
+		subtitle = ""
+	} else if remainingWidth < subtitleWidth {
 		if remainingWidth < 3 {
-			branch = ""
+			subtitle = ""
 		} else {
-			// We know the remainingWidth is at least 4 and branch is longer than that, so this is safe.
-			branch = runewidth.Truncate(branch, remainingWidth-3, "...")
+			// We know the remainingWidth is at least 4 and the subtitle is longer than that, so this is safe.
+			subtitle = runewidth.Truncate(subtitle, remainingWidth-3, "...")
 		}
 	}
-	remainingWidth -= runewidth.StringWidth(branch)
+	remainingWidth -= runewidth.StringWidth(subtitle)
 
 	// Add spaces to fill the remaining width.
 	spaces := ""
@@ -213,20 +259,20 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		spaces = strings.Repeat(" ", remainingWidth)
 	}
 
-	branchLine := fmt.Sprintf("%s %s-%s%s%s", strings.Repeat(" ", len(prefix)), branchIcon, branch, spaces, diff)
+	dirLine := fmt.Sprintf("%s %s-%s%s%s", strings.Repeat(" ", len(prefix)), dirIcon, subtitle, spaces, diff)
 
 	// join title and subtitle
 	text := lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
-		descS.Render(branchLine),
+		descS.Render(dirLine),
 	)
 
 	return text
 }
 
 func (l *List) String() string {
-	const titleText = " Instances "
+	const titleText = " Sessões "
 	const autoYesText = " auto-yes "
 
 	// Write the title.
@@ -291,13 +337,8 @@ func (l *List) Kill() {
 		defer l.Up()
 	}
 
-	// Unregister the reponame.
-	repoName, err := targetInstance.RepoName()
-	if err != nil {
-		log.ErrorLog.Printf("could not get repo name: %v", err)
-	} else {
-		l.rmRepo(repoName)
-	}
+	// Unregister the directory name.
+	l.rmRepo(targetInstance.DirName())
 
 	// Since there's items after this, the selectedIdx can stay the same.
 	l.items = append(l.items[:l.selectedIdx], l.items[l.selectedIdx+1:]...)
@@ -343,13 +384,9 @@ func (l *List) rmRepo(repo string) {
 // When creating a new one and entering the name, you want to call the finalizer once the name is done.
 func (l *List) AddInstance(instance *session.Instance) (finalize func()) {
 	l.items = append(l.items, instance)
-	// The finalizer registers the repo name once the instance is started.
+	// The finalizer registers the directory name once the instance is started.
 	return func() {
-		repoName, err := instance.RepoName()
-		if err != nil {
-			log.ErrorLog.Printf("could not get repo name: %v", err)
-			return
-		}
+		repoName := instance.DirName()
 
 		l.addRepo(repoName)
 	}
@@ -404,4 +441,26 @@ func (l *List) MoveDown() bool {
 // GetInstances returns all instances in the list
 func (l *List) GetInstances() []*session.Instance {
 	return l.items
+}
+
+// truncateLeft keeps the end of s, dropping the front with a leading ellipsis
+// when it does not fit in width columns.
+func truncateLeft(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(s) <= width {
+		return s
+	}
+	if width <= 3 {
+		return strings.Repeat(".", width)
+	}
+	runes := []rune(s)
+	for i := range runes {
+		tail := string(runes[i:])
+		if runewidth.StringWidth(tail)+3 <= width {
+			return "..." + tail
+		}
+	}
+	return "..."
 }

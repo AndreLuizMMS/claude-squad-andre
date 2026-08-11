@@ -1,162 +1,106 @@
-# Claude Squad [![CI](https://github.com/smtg-ai/claude-squad/actions/workflows/build.yml/badge.svg)](https://github.com/smtg-ai/claude-squad/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/smtg-ai/claude-squad)](https://github.com/smtg-ai/claude-squad/releases/latest)
+# Claude Squad (fork)
 
-[Claude Squad](https://smtg-ai.github.io/claude-squad/) is a terminal app that manages multiple [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli) (and other local agents including [Aider](https://github.com/Aider-AI/aider)) in separate workspaces, allowing you to work on multiple tasks simultaneously.
+Aplicação de terminal que gerencia várias sessões de agente ([Claude Code](https://github.com/anthropics/claude-code), Codex, Gemini, Aider) ao mesmo tempo, cada uma no seu próprio diretório de trabalho.
 
+Diferenças em relação ao projeto de origem:
 
-![Claude Squad Screenshot](assets/screenshot.png)
+- Cada sessão roda **direto no diretório escolhido** — sem cópia de trabalho, sem branch própria, sem tocar em versionamento.
+- Abre a partir de **qualquer lugar**, inclusive fora de um repositório.
+- Um coordenador só atende **vários projetos** ao mesmo tempo.
 
-### Highlights
-- Complete tasks in the background (including yolo / auto-accept mode!)
-- Manage instances and tasks in one terminal window
-- Review changes before applying them, checkout changes before pushing them
-- Each task gets its own isolated git workspace, so no conflicts
-
-<br />
-
-https://github.com/user-attachments/assets/aef18253-e58f-4525-9032-f5a3d66c975a
-
-<br />
-
-### Installation
-
-Both Homebrew and manual installation will install Claude Squad as `cs` on your system.
-
-#### Homebrew
-
-```bash
-brew install claude-squad
-ln -s "$(brew --prefix)/bin/claude-squad" "$(brew --prefix)/bin/cs"
-```
-
-#### Manual
-
-Claude Squad can also be installed by running the following command:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash
-```
-
-This puts the `cs` binary in `~/.local/bin`.
-
-To use a custom name for the binary:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash -s -- --name <your-binary-name>
-```
-
-### Prerequisites
+## Pré-requisitos
 
 - [tmux](https://github.com/tmux/tmux/wiki/Installing)
-- [gh](https://cli.github.com/)
+- [Go](https://go.dev/dl/) 1.23 ou superior
+- O agente que você vai usar (`claude`, por padrão)
 
-### Usage
+## Instalação
 
-```
-Usage:
-  cs [flags]
-  cs [command]
+Clone este repositório e rode o instalador:
 
-Available Commands:
-  completion  Generate the autocompletion script for the specified shell
-  debug       Print debug information like config paths
-  help        Help about any command
-  reset       Reset all stored instances
-  version     Print the version number of claude-squad
-
-Flags:
-  -y, --autoyes          [experimental] If enabled, all instances will automatically accept prompts for claude code & aider
-  -h, --help             help for claude-squad
-  -p, --program string   Program to run in new instances (e.g. 'aider --model ollama_chat/gemma3:1b')
+```bash
+git clone git@github.com:AndreLuizMMS/claude-squad-andre.git
+cd claude-squad-andre
+./install.sh
 ```
 
-Run the application with:
+O binário é compilado a partir do código local e instalado como `cs` em `~/.local/bin`.
+
+Para usar outro nome:
+
+```bash
+./install.sh --name meu-cs
+```
+
+Para instalar em outro diretório:
+
+```bash
+BIN_DIR=/usr/local/bin ./install.sh
+```
+
+### Sem o instalador
+
+```bash
+go build -o ~/.local/bin/cs .
+```
+
+### Atualizar
+
+```bash
+git pull && ./install.sh
+```
+
+## Uso
 
 ```bash
 cs
 ```
-NOTE: The default program is `claude` and we recommend using the latest version.
 
-<br />
+Trocar o agente padrão em uma execução:
 
-<b>Using Claude Squad with other AI assistants:</b>
-- For [Codex](https://github.com/openai/codex): Set your API key with `export OPENAI_API_KEY=<your_key>`
-- Launch with specific assistants:
-   - Codex: `cs -p "codex"`
-   - Aider: `cs -p "aider ..."`
-   - Gemini: `cs -p "gemini"`
-- Make this the default, by modifying the config file (locate with `cs debug`)
+```bash
+cs -p "codex"
+```
 
-<br />
+### Atalhos
 
-#### Menu
-The menu at the bottom of the screen shows available commands: 
+| Tecla | Ação |
+|---|---|
+| `n` | Criar sessão |
+| `N` | Criar sessão com prompt |
+| `↵` / `o` | Entrar na sessão selecionada |
+| `ctrl-l` | Sair da sessão e voltar para a lista |
+| `c` | Pausar: fecha o terminal e mantém a sessão |
+| `r` | Retomar uma sessão pausada |
+| `D` | Encerrar a sessão selecionada |
+| `↑/j`, `↓/k` | Navegar entre sessões |
+| `J`/`K` | Reordenar sessões |
+| `tab` | Alternar entre as abas |
+| `shift-↑/↓` | Rolar a aba ativa |
+| `?` | Ajuda |
+| `q` | Sair |
 
-##### Instance/Session Management
-- `n` - Create a new session
-- `N` - Create a new session with a prompt
-- `D` - Kill (delete) the selected session
-- `↑/j`, `↓/k` - Navigate between sessions
+## Configuração
 
-##### Actions
-- `↵/o` - Attach to the selected session to reprompt
-- `ctrl-q` - Detach from session
-- `s` - Commit and push branch to github
-- `c` - Checkout. Commits changes and pauses the session
-- `r` - Resume a paused session
-- `?` - Show help menu
-
-##### Navigation
-- `tab` - Switch between preview tab and diff tab
-- `q` - Quit the application
-- `shift-↓/↑` - scroll in diff view
-
-### Configuration
-
-Claude Squad stores its configuration in `~/.claude-squad/config.json`. You can find the exact path by running `cs debug`.
-
-#### Profiles
-
-Profiles let you define multiple named program configurations and switch between them when creating a new session. When more than one profile is defined, the session creation overlay shows a profile picker that you can navigate with `←`/`→`.
-
-To configure profiles, add a `profiles` array to your config file and set `default_program` to the name of the profile to select by default:
+Fica em `~/.claude-squad/config.json` (confirme o caminho com `cs debug`).
 
 ```json
 {
   "default_program": "claude",
+  "disable_bell": false,
   "profiles": [
     { "name": "claude", "program": "claude" },
-    { "name": "codex", "program": "codex" },
-    { "name": "aider", "program": "aider --model ollama_chat/gemma3:1b" }
+    { "name": "codex", "program": "codex" }
   ]
 }
 ```
 
-Each profile has two fields:
+| Campo | Descrição |
+|---|---|
+| `default_program` | Agente usado ao criar sessões |
+| `disable_bell` | `true` desliga o som tocado quando um agente devolve a vez |
+| `profiles` | Agentes disponíveis no seletor da criação de sessão |
 
-| Field     | Description                                              |
-|-----------|----------------------------------------------------------|
-| `name`    | Display name shown in the profile picker                 |
-| `program` | Shell command used to launch the agent for that profile  |
+## Licença
 
-If no profiles are defined, Claude Squad uses `default_program` directly as the launch command (the default is `claude`).
-
-### FAQs
-
-#### Failed to start new session
-
-If you get an error like `failed to start new session: timed out waiting for tmux session`, update the
-underlying program (ex. `claude`) to the latest version.
-
-### How It Works
-
-1. **tmux** to create isolated terminal sessions for each agent
-2. **git worktrees** to isolate codebases so each session works on its own branch
-3. A simple TUI interface for easy navigation and management
-
-### License
-
-[AGPL-3.0](LICENSE.md)
-
-### Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=smtg-ai/claude-squad&type=Date)](https://www.star-history.com/#smtg-ai/claude-squad&Date)
+[AGPL-3.0](LICENSE.md) — fork de [smtg-ai/claude-squad](https://github.com/smtg-ai/claude-squad).

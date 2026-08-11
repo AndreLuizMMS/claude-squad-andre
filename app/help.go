@@ -27,7 +27,7 @@ type helpTypeInstanceStart struct {
 
 type helpTypeInstanceAttach struct{}
 
-type helpTypeInstanceCheckout struct{}
+type helpTypeInstancePause struct{}
 
 func helpStart(instance *session.Instance) helpText {
 	return helpTypeInstanceStart{instance: instance}
@@ -37,75 +37,76 @@ func (h helpTypeGeneral) toContent() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		titleStyle.Render("Claude Squad"),
 		"",
-		"A terminal UI that manages multiple Claude Code (and other local agents) in separate workspaces.",
+		"Interface de terminal que gerencia várias sessões do Claude Code (e outros agentes locais), cada uma no seu diretório.",
 		"",
-		headerStyle.Render("Managing:"),
-		keyStyle.Render("n")+descStyle.Render("         - Create a new session"),
-		keyStyle.Render("N")+descStyle.Render("         - Create a new session with a prompt"),
-		keyStyle.Render("D")+descStyle.Render("         - Kill (delete) the selected session"),
-		keyStyle.Render("↑/j, ↓/k")+descStyle.Render("  - Navigate between sessions"),
-		keyStyle.Render("J/K")+descStyle.Render("       - Reorder sessions"),
-		keyStyle.Render("↵/o")+descStyle.Render("       - Attach to the selected session"),
-		keyStyle.Render("ctrl-q")+descStyle.Render("    - Detach from session"),
+		headerStyle.Render("Gerenciar:"),
+		keyStyle.Render("n")+descStyle.Render("         - Criar uma nova sessão"),
+		keyStyle.Render("N")+descStyle.Render("         - Criar uma nova sessão com prompt"),
+		keyStyle.Render("D")+descStyle.Render("         - Encerrar (excluir) a sessão selecionada"),
+		keyStyle.Render("↑/j, ↓/k")+descStyle.Render("  - Navegar entre as sessões"),
+		keyStyle.Render("J/K")+descStyle.Render("       - Reordenar as sessões"),
+		keyStyle.Render("↵/o")+descStyle.Render("       - Entrar na sessão selecionada"),
+		keyStyle.Render("ctrl-l")+descStyle.Render("    - Sair da sessão e voltar para a lista"),
 		"",
-		headerStyle.Render("Handoff:"),
-		keyStyle.Render("p")+descStyle.Render("         - Commit and push branch to github"),
-		keyStyle.Render("c")+descStyle.Render("         - Checkout: commit changes and pause session"),
-		keyStyle.Render("r")+descStyle.Render("         - Resume a paused session"),
+		headerStyle.Render("Estado da sessão:"),
+		keyStyle.Render("c")+descStyle.Render("         - Pausar: fecha o terminal e mantém a sessão"),
+		keyStyle.Render("r")+descStyle.Render("         - Retomar uma sessão pausada"),
 		"",
-		headerStyle.Render("Other:"),
-		keyStyle.Render("tab")+descStyle.Render("       - Switch between preview, diff, and terminal tabs"),
-		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Scroll in preview/diff/terminal view"),
-		keyStyle.Render("q")+descStyle.Render("         - Quit the application"),
+		headerStyle.Render("Outros:"),
+		keyStyle.Render("tab")+descStyle.Render("       - Alternar entre as abas prévia, diff e terminal"),
+		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Rolar a prévia, o diff ou o terminal"),
+		keyStyle.Render("q")+descStyle.Render("         - Sair do aplicativo"),
 	)
 	return content
 }
 
 func (h helpTypeInstanceStart) toContent() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Instance Created"),
+		titleStyle.Render("Sessão criada"),
 		"",
-		descStyle.Render("New session created:"),
-		descStyle.Render(fmt.Sprintf("• Git branch: %s (isolated worktree)",
-			lipgloss.NewStyle().Bold(true).Render(h.instance.Branch))),
-		descStyle.Render(fmt.Sprintf("• %s running in background tmux session",
+		descStyle.Render("Nova sessão criada:"),
+		descStyle.Render(fmt.Sprintf("• Diretório de trabalho: %s",
+			lipgloss.NewStyle().Bold(true).Render(h.instance.Path))),
+		descStyle.Render(fmt.Sprintf("• %s rodando em sessão tmux em segundo plano",
 			lipgloss.NewStyle().Bold(true).Render(h.instance.Program))),
 		"",
-		headerStyle.Render("Managing:"),
-		keyStyle.Render("↵/o")+descStyle.Render("   - Attach to the session to interact with it directly"),
-		keyStyle.Render("tab")+descStyle.Render("   - Switch preview panes to view session diff"),
-		keyStyle.Render("D")+descStyle.Render("     - Kill (delete) the selected session"),
+		descStyle.Render("O agente edita esse diretório diretamente. O versionamento fica por sua conta."),
 		"",
-		headerStyle.Render("Handoff:"),
-		keyStyle.Render("c")+descStyle.Render("     - Checkout this instance's branch"),
-		keyStyle.Render("p")+descStyle.Render("     - Push branch to GitHub to create a PR"),
+		headerStyle.Render("Gerenciar:"),
+		keyStyle.Render("↵/o")+descStyle.Render("   - Entrar na sessão para interagir diretamente"),
+		keyStyle.Render("tab")+descStyle.Render("   - Alternar os painéis para ver o diff da sessão"),
+		keyStyle.Render("D")+descStyle.Render("     - Encerrar (excluir) a sessão selecionada"),
+		keyStyle.Render("c")+descStyle.Render("     - Pausar: fecha o terminal e mantém a sessão"),
 	)
 	return content
 }
 
 func (h helpTypeInstanceAttach) toContent() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Attaching to Instance"),
+		titleStyle.Render("Entrando na sessão"),
 		"",
-		descStyle.Render("To detach from a session, press ")+keyStyle.Render("ctrl-q"),
+		descStyle.Render("Para voltar para a lista de sessões, pressione ")+keyStyle.Render("ctrl-l"),
 	)
 	return content
 }
 
-func (h helpTypeInstanceCheckout) toContent() string {
+func (h helpTypeInstancePause) toContent() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Checkout Instance"),
+		titleStyle.Render("Pausar sessão"),
 		"",
-		"Changes will be committed locally. The branch name has been copied to your clipboard for you to checkout.",
+		"O terminal será fechado. O diretório permanece exatamente como está — nada é commitado e nada é removido.",
 		"",
-		"Feel free to make changes to the branch and commit them. When resuming, the session will continue from where you left off.",
+		"Retomar reabre o terminal no mesmo diretório, no estado em que ele estiver.",
 		"",
-		headerStyle.Render("Commands:"),
-		keyStyle.Render("c")+descStyle.Render(" - Checkout: commit changes locally and pause session"),
-		keyStyle.Render("r")+descStyle.Render(" - Resume a paused session"),
+		"Atenção: o agente perde o contexto da conversa ao ser pausado.",
+		"",
+		headerStyle.Render("Comandos:"),
+		keyStyle.Render("c")+descStyle.Render(" - Pausar a sessão"),
+		keyStyle.Render("r")+descStyle.Render(" - Retomar uma sessão pausada"),
 	)
 	return content
 }
+
 func (h helpTypeGeneral) mask() uint32 {
 	return 1
 }
@@ -116,7 +117,7 @@ func (h helpTypeInstanceStart) mask() uint32 {
 func (h helpTypeInstanceAttach) mask() uint32 {
 	return 1 << 2
 }
-func (h helpTypeInstanceCheckout) mask() uint32 {
+func (h helpTypeInstancePause) mask() uint32 {
 	return 1 << 3
 }
 
@@ -155,9 +156,13 @@ func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, t
 		return m, nil
 	}
 
-	// Skip displaying the help screen
+	// Skip displaying the help screen. The dismissal callback still runs, and it
+	// still needs the redraw that dismissing the overlay would have produced:
+	// attaching resizes the agent's terminal to the full window, so without a
+	// resize on the way back the panes stay drawn at the wrong size.
 	if onDismiss != nil {
 		onDismiss()
+		return m, tea.WindowSize()
 	}
 	return m, nil
 }

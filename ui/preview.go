@@ -53,14 +53,14 @@ func (p *PreviewPane) setFallbackState(message string) {
 func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 	switch {
 	case instance == nil:
-		p.setFallbackState("No agents running yet. Spin up a new instance with 'n' to get started!")
+		p.setFallbackState("Nenhum agente rodando ainda. Pressione 'n' para criar uma sessão.")
 		return nil
 	case instance.Status == session.Loading:
-		p.setFallbackState("Setting up workspace...")
+		p.setFallbackState("Preparando o ambiente de trabalho...")
 		return nil
 	case instance.Status == session.Paused:
 		p.setFallbackState(lipgloss.JoinVertical(lipgloss.Center,
-			"Session is paused. Press 'r' to resume.",
+			"Sessão pausada. Pressione 'r' para retomar.",
 			"",
 			lipgloss.NewStyle().
 				Foreground(lipgloss.AdaptiveColor{
@@ -68,8 +68,8 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 					Dark:  "#FFD700",
 				}).
 				Render(fmt.Sprintf(
-					"The instance can be checked out at '%s' (copied to your clipboard)",
-					instance.Branch,
+					"Pausada. O terminal está fechado; '%s' segue intacto. Pressione 'r' para retomar.",
+					instance.Path,
 				)),
 		))
 		return nil
@@ -89,7 +89,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		// Set content in the viewport
 		footer := lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#808080", Dark: "#808080"}).
-			Render("ESC to exit scroll mode")
+			Render("ESC para sair do modo de rolagem")
 
 		p.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, content, footer))
 	} else if !p.isScrolling {
@@ -102,7 +102,7 @@ func (p *PreviewPane) UpdateContent(instance *session.Instance) error {
 		// Always update the preview state with content, even if empty
 		// This ensures that newly created instances will display their content immediately
 		if len(content) == 0 && !instance.Started() {
-			p.setFallbackState("Please enter a name for the instance.")
+			p.setFallbackState("Digite um nome para a sessão.")
 		} else {
 			// Update the preview state with the current content
 			p.previewState = previewState{
@@ -198,7 +198,7 @@ func (p *PreviewPane) ScrollUp(instance *session.Instance) error {
 		// Set content in the viewport
 		footer := lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#808080", Dark: "#808080"}).
-			Render("ESC to exit scroll mode")
+			Render("ESC para sair do modo de rolagem")
 
 		contentWithFooter := lipgloss.JoinVertical(lipgloss.Left, content, footer)
 		p.viewport.SetContent(contentWithFooter)
@@ -231,7 +231,7 @@ func (p *PreviewPane) ScrollDown(instance *session.Instance) error {
 		// Set content in the viewport
 		footer := lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#808080", Dark: "#808080"}).
-			Render("ESC to exit scroll mode")
+			Render("ESC para sair do modo de rolagem")
 
 		contentWithFooter := lipgloss.JoinVertical(lipgloss.Left, content, footer)
 		p.viewport.SetContent(contentWithFooter)

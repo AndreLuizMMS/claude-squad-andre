@@ -86,10 +86,10 @@ var (
 // Render renders the profile picker.
 func (pp *ProfilePicker) Render() string {
 	var s strings.Builder
-	s.WriteString(ppLabelStyle.Render("Profile"))
+	s.WriteString(ppLabelStyle.Render("Perfil"))
 
 	if pp.HasMultiple() && pp.focused {
-		s.WriteString(ppDimStyle.Render("  ←/→ to change"))
+		s.WriteString(ppDimStyle.Render("  ←/→ para trocar"))
 	}
 	s.WriteString("\n\n")
 

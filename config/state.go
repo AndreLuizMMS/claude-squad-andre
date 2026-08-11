@@ -80,6 +80,7 @@ func LoadState() *State {
 	var state State
 	if err := json.Unmarshal(data, &state); err != nil {
 		log.ErrorLog.Printf("failed to parse state file: %v", err)
+		BackupStateFile()
 		return DefaultState()
 	}
 
@@ -136,4 +137,24 @@ func (s *State) GetHelpScreensSeen() uint32 {
 func (s *State) SetHelpScreensSeen(seen uint32) error {
 	s.HelpScreensSeen = seen
 	return SaveState(s)
+}
+
+// BackupStateFile copies the state file aside before anything can overwrite it.
+// A record we failed to read is not a record we are allowed to destroy.
+func BackupStateFile() {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return
+	}
+	statePath := filepath.Join(configDir, StateFileName)
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		return
+	}
+	backup := statePath + ".corrupt"
+	if err := os.WriteFile(backup, data, 0644); err != nil {
+		log.WarningLog.Printf("failed to back up state file: %v", err)
+		return
+	}
+	log.WarningLog.Printf("unreadable state preserved at %s", backup)
 }

@@ -1,6 +1,9 @@
 package git
 
 import (
+	"errors"
+	"fmt"
+	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -22,24 +25,47 @@ func (d *DiffStats) IsEmpty() bool {
 	return d.Added == 0 && d.Removed == 0 && d.Content == ""
 }
 
-// Diff returns the git diff between the worktree and the base branch along with statistics
-func (g *GitWorktree) Diff() *DiffStats {
+// ErrNoDiffBase is returned when a directory has no version history to compare
+// against. It is not a failure — sessions work on plain directories too.
+var ErrNoDiffBase = errors.New("no comparison base available (directory is not versioned)")
+
+// DirectDiff returns the uncommitted changes present in dir right now, without
+// touching the index: it never runs `git add -N`, because the directory belongs
+// to the developer and the coordinator must not act on versioning. Untracked
+// files are therefore not included.
+//
+// Note the changes shown are not exclusive to the agent — any edit in the
+// directory appears here.
+func DirectDiff(dir string, numstatOnly bool) *DiffStats {
 	stats := &DiffStats{}
 
-	// -N stages untracked files (intent to add), including them in the diff
-	_, err := g.runGitCommand(g.worktreePath, "add", "-N", ".")
-	if err != nil {
-		stats.Error = err
+	if !IsGitRepo(dir) {
+		stats.Error = ErrNoDiffBase
+		return stats
+	}
+	// An empty repository has no HEAD to compare against.
+	if err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "HEAD").Run(); err != nil {
+		stats.Error = ErrNoDiffBase
 		return stats
 	}
 
-	content, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", g.GetBaseCommitSHA())
+	args := []string{"-C", dir, "--no-pager", "diff", "HEAD"}
+	if numstatOnly {
+		args = append(args, "--numstat")
+	}
+	out, err := exec.Command("git", args...).Output()
 	if err != nil {
-		stats.Error = err
+		stats.Error = fmt.Errorf("failed to diff %s: %w", dir, err)
 		return stats
 	}
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
+	content := string(out)
+
+	if numstatOnly {
+		stats.Added, stats.Removed = parseNumstat(content)
+		return stats
+	}
+
+	for _, line := range strings.Split(content, "\n") {
 		if strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++") {
 			stats.Added++
 		} else if strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---") {
@@ -47,30 +73,6 @@ func (g *GitWorktree) Diff() *DiffStats {
 		}
 	}
 	stats.Content = content
-
-	return stats
-}
-
-// DiffNumstat returns the added/removed line counts between the worktree and the
-// base branch without loading the full diff content into memory. Use this when
-// only the summary counts are needed (e.g. for unselected instances in the list).
-func (g *GitWorktree) DiffNumstat() *DiffStats {
-	stats := &DiffStats{}
-
-	// -N stages untracked files (intent to add), including them in the diff
-	_, err := g.runGitCommand(g.worktreePath, "add", "-N", ".")
-	if err != nil {
-		stats.Error = err
-		return stats
-	}
-
-	out, err := g.runGitCommand(g.worktreePath, "--no-pager", "diff", "--numstat", g.GetBaseCommitSHA())
-	if err != nil {
-		stats.Error = err
-		return stats
-	}
-
-	stats.Added, stats.Removed = parseNumstat(out)
 	return stats
 }
 

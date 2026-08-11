@@ -134,7 +134,7 @@ func TestTerminalUpdateContent(t *testing.T) {
 	// Inject a mock session that returns expectedContent on capture-pane
 	ts := newMockTmuxSession(t, "mock-update", cmdExec)
 	// Start the session so DoesSessionExist returns true
-	injectSession(tp, instance.Title, ts, t.TempDir())
+	injectSession(tp, instance.ID(), ts, t.TempDir())
 
 	// UpdateContent should set fallback=false and capture content
 	err := tp.UpdateContent(instance)
@@ -163,7 +163,7 @@ func TestTerminalFallbackStates(t *testing.T) {
 
 		tp.mu.Lock()
 		require.True(t, tp.fallback, "should be in fallback mode for nil instance")
-		require.Contains(t, tp.fallbackText, "Select an instance", "fallback text should prompt to select instance")
+		require.Contains(t, tp.fallbackText, "Selecione uma sessão", "fallback text should prompt to select instance")
 		require.Empty(t, tp.content, "content should be empty in fallback mode")
 		tp.mu.Unlock()
 	})
@@ -228,10 +228,10 @@ func TestTerminalSessionCaching(t *testing.T) {
 	defer func() { _ = instance2.Kill() }()
 
 	// Inject two separate sessions
-	injectSession(tp, instance1.Title, ts1, t.TempDir())
+	injectSession(tp, instance1.ID(), ts1, t.TempDir())
 
 	tp.mu.Lock()
-	tp.sessions[instance2.Title] = &terminalSession{
+	tp.sessions[instance2.ID()] = &terminalSession{
 		tmuxSession:  ts2,
 		worktreePath: t.TempDir(),
 	}
@@ -239,7 +239,7 @@ func TestTerminalSessionCaching(t *testing.T) {
 
 	// Switch to instance1 and capture
 	tp.mu.Lock()
-	tp.currentTitle = instance1.Title
+	tp.currentTitle = instance1.ID()
 	tp.mu.Unlock()
 
 	err := tp.UpdateContent(instance1)
@@ -250,7 +250,7 @@ func TestTerminalSessionCaching(t *testing.T) {
 
 	// Switch to instance2 and capture
 	tp.mu.Lock()
-	tp.currentTitle = instance2.Title
+	tp.currentTitle = instance2.ID()
 	tp.mu.Unlock()
 
 	err = tp.UpdateContent(instance2)
@@ -261,7 +261,7 @@ func TestTerminalSessionCaching(t *testing.T) {
 
 	// Switch back to instance1 — session should still exist (cached)
 	tp.mu.Lock()
-	tp.currentTitle = instance1.Title
+	tp.currentTitle = instance1.ID()
 	tp.mu.Unlock()
 
 	err = tp.UpdateContent(instance1)
@@ -293,7 +293,7 @@ func TestTerminalScrolling(t *testing.T) {
 	tp.SetSize(80, 30)
 
 	ts := newMockTmuxSession(t, "scroll-test", cmdExec)
-	injectSession(tp, instance.Title, ts, t.TempDir())
+	injectSession(tp, instance.ID(), ts, t.TempDir())
 
 	// Initially not scrolling
 	require.False(t, tp.IsScrolling(), "should not be scrolling initially")
@@ -340,9 +340,9 @@ func TestTerminalCloseForInstance(t *testing.T) {
 	ts1 := newMockTmuxSession(t, "close-test-1", cmdExec)
 	ts2 := newMockTmuxSession(t, "close-test-2", cmdExec)
 
-	injectSession(tp, instance1.Title, ts1, t.TempDir())
+	injectSession(tp, instance1.ID(), ts1, t.TempDir())
 	tp.mu.Lock()
-	tp.sessions[instance2.Title] = &terminalSession{
+	tp.sessions[instance2.ID()] = &terminalSession{
 		tmuxSession:  ts2,
 		worktreePath: t.TempDir(),
 	}
@@ -354,14 +354,14 @@ func TestTerminalCloseForInstance(t *testing.T) {
 	tp.mu.Unlock()
 
 	// Close instance1's session
-	tp.CloseForInstance(instance1.Title)
+	tp.CloseForInstance(instance1.ID())
 
 	// Only instance2 should remain
 	tp.mu.Lock()
 	require.Len(t, tp.sessions, 1, "should have only 1 session after closing instance1")
-	_, exists := tp.sessions[instance1.Title]
+	_, exists := tp.sessions[instance1.ID()]
 	require.False(t, exists, "instance1 session should be removed")
-	_, exists = tp.sessions[instance2.Title]
+	_, exists = tp.sessions[instance2.ID()]
 	require.True(t, exists, "instance2 session should still exist")
 	require.Empty(t, tp.currentTitle, "currentTitle should be cleared when closing current instance")
 	tp.mu.Unlock()

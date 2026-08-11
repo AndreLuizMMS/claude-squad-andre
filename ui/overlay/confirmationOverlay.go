@@ -69,9 +69,9 @@ func (c *ConfirmationOverlay) Render(opts ...WhitespaceOption) string {
 
 	// Add the confirmation instructions
 	content := c.message + "\n\n" +
-		"Press " + lipgloss.NewStyle().Bold(true).Render(c.ConfirmKey) + " to confirm, " +
-		lipgloss.NewStyle().Bold(true).Render(c.CancelKey) + " or " +
-		lipgloss.NewStyle().Bold(true).Render("esc") + " to cancel"
+		"Pressione " + lipgloss.NewStyle().Bold(true).Render(c.ConfirmKey) + " para confirmar, " +
+		lipgloss.NewStyle().Bold(true).Render(c.CancelKey) + " ou " +
+		lipgloss.NewStyle().Bold(true).Render("esc") + " para cancelar"
 
 	// Apply the border style and return
 	return style.Render(content)

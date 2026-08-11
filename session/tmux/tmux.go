@@ -255,6 +255,10 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 	return false, hasPrompt
 }
 
+// detachKeyByte is ctrl+l: the key that leaves an attached session and returns
+// to the list of sessions.
+const detachKeyByte = 12
+
 func (t *TmuxSession) Attach() (chan struct{}, error) {
 	t.attachCh = make(chan struct{})
 
@@ -279,7 +283,7 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 		default:
 			// If context is not done, it was likely an abnormal termination (Ctrl-D)
 			// Print warning message
-			fmt.Fprintf(os.Stderr, "\n\033[31mError: Session terminated without detaching. Use Ctrl-Q to properly detach from tmux sessions.\033[0m\n")
+			fmt.Fprintf(os.Stderr, "\n\033[31mError: Session terminated without detaching. Use Ctrl-L to properly detach from tmux sessions.\033[0m\n")
 		}
 	}()
 
@@ -316,8 +320,9 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 				continue
 			}
 
-			// Check for Ctrl+q (ASCII 17)
-			if nr == 1 && buf[0] == 17 {
+			// Check for Ctrl+l (ASCII 12), the key that gives the screen back
+			// to the coordinator.
+			if nr == 1 && buf[0] == detachKeyByte {
 				// Detach from the session
 				t.Detach()
 				return
