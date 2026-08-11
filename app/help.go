@@ -27,7 +27,7 @@ type helpTypeInstanceStart struct {
 
 type helpTypeInstanceAttach struct{}
 
-type helpTypeInstanceCheckout struct{}
+type helpTypeInstancePause struct{}
 
 func helpStart(instance *session.Instance) helpText {
 	return helpTypeInstanceStart{instance: instance}
@@ -37,7 +37,7 @@ func (h helpTypeGeneral) toContent() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		titleStyle.Render("Claude Squad"),
 		"",
-		"A terminal UI that manages multiple Claude Code (and other local agents) in separate workspaces.",
+		"A terminal UI that manages multiple Claude Code (and other local agents), each in its own directory.",
 		"",
 		headerStyle.Render("Managing:"),
 		keyStyle.Render("n")+descStyle.Render("         - Create a new session"),
@@ -48,9 +48,8 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("↵/o")+descStyle.Render("       - Attach to the selected session"),
 		keyStyle.Render("ctrl-q")+descStyle.Render("    - Detach from session"),
 		"",
-		headerStyle.Render("Handoff:"),
-		keyStyle.Render("p")+descStyle.Render("         - Commit and push branch to github"),
-		keyStyle.Render("c")+descStyle.Render("         - Checkout: commit changes and pause session"),
+		headerStyle.Render("Session state:"),
+		keyStyle.Render("c")+descStyle.Render("         - Pause: close the terminal, keep the session"),
 		keyStyle.Render("r")+descStyle.Render("         - Resume a paused session"),
 		"",
 		headerStyle.Render("Other:"),
@@ -66,19 +65,18 @@ func (h helpTypeInstanceStart) toContent() string {
 		titleStyle.Render("Instance Created"),
 		"",
 		descStyle.Render("New session created:"),
-		descStyle.Render(fmt.Sprintf("• Git branch: %s (isolated worktree)",
-			lipgloss.NewStyle().Bold(true).Render(h.instance.Branch))),
+		descStyle.Render(fmt.Sprintf("• Working directory: %s",
+			lipgloss.NewStyle().Bold(true).Render(h.instance.Path))),
 		descStyle.Render(fmt.Sprintf("• %s running in background tmux session",
 			lipgloss.NewStyle().Bold(true).Render(h.instance.Program))),
+		"",
+		descStyle.Render("The agent edits that directory directly. Versioning is yours to drive."),
 		"",
 		headerStyle.Render("Managing:"),
 		keyStyle.Render("↵/o")+descStyle.Render("   - Attach to the session to interact with it directly"),
 		keyStyle.Render("tab")+descStyle.Render("   - Switch preview panes to view session diff"),
 		keyStyle.Render("D")+descStyle.Render("     - Kill (delete) the selected session"),
-		"",
-		headerStyle.Render("Handoff:"),
-		keyStyle.Render("c")+descStyle.Render("     - Checkout this instance's branch"),
-		keyStyle.Render("p")+descStyle.Render("     - Push branch to GitHub to create a PR"),
+		keyStyle.Render("c")+descStyle.Render("     - Pause: close the terminal, keep the session"),
 	)
 	return content
 }
@@ -92,20 +90,23 @@ func (h helpTypeInstanceAttach) toContent() string {
 	return content
 }
 
-func (h helpTypeInstanceCheckout) toContent() string {
+func (h helpTypeInstancePause) toContent() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Checkout Instance"),
+		titleStyle.Render("Pause Session"),
 		"",
-		"Changes will be committed locally. The branch name has been copied to your clipboard for you to checkout.",
+		"The terminal will be closed. Your directory is left exactly as it is — nothing is committed and nothing is removed.",
 		"",
-		"Feel free to make changes to the branch and commit them. When resuming, the session will continue from where you left off.",
+		"Resuming reopens the terminal in the same directory, in whatever state it is in then.",
+		"",
+		"Note: the agent loses its conversation context when paused.",
 		"",
 		headerStyle.Render("Commands:"),
-		keyStyle.Render("c")+descStyle.Render(" - Checkout: commit changes locally and pause session"),
+		keyStyle.Render("c")+descStyle.Render(" - Pause the session"),
 		keyStyle.Render("r")+descStyle.Render(" - Resume a paused session"),
 	)
 	return content
 }
+
 func (h helpTypeGeneral) mask() uint32 {
 	return 1
 }
@@ -116,7 +117,7 @@ func (h helpTypeInstanceStart) mask() uint32 {
 func (h helpTypeInstanceAttach) mask() uint32 {
 	return 1 << 2
 }
-func (h helpTypeInstanceCheckout) mask() uint32 {
+func (h helpTypeInstancePause) mask() uint32 {
 	return 1 << 3
 }
 
@@ -155,9 +156,13 @@ func (m *home) showHelpScreen(helpType helpText, onDismiss func()) (tea.Model, t
 		return m, nil
 	}
 
-	// Skip displaying the help screen
+	// Skip displaying the help screen. The dismissal callback still runs, and it
+	// still needs the redraw that dismissing the overlay would have produced:
+	// attaching resizes the agent's terminal to the full window, so without a
+	// resize on the way back the panes stay drawn at the wrong size.
 	if onDismiss != nil {
 		onDismiss()
+		return m, tea.WindowSize()
 	}
 	return m, nil
 }

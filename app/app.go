@@ -23,7 +23,8 @@ import (
 
 const GlobalInstanceLimit = 10
 
-// Run is the main entrypoint into the application.
+// Run is the main entrypoint into the application. It can be launched from
+// anywhere: each session carries its own working directory.
 func Run(ctx context.Context, program string, autoYes bool) error {
 	p := tea.NewProgram(
 		newHome(ctx, program, autoYes),
@@ -46,6 +47,15 @@ const (
 	stateHelp
 	// stateConfirm is the state when a confirmation modal is displayed.
 	stateConfirm
+)
+
+// newInstanceField is which field of the new-session form has focus. The form
+// runs inline in the list: title, then working directory.
+type newInstanceField int
+
+const (
+	fieldTitle newInstanceField = iota
+	fieldPath
 )
 
 type home struct {
@@ -73,6 +83,22 @@ type home struct {
 
 	// promptAfterName tracks if we should enter prompt mode after naming
 	promptAfterName bool
+
+	// newField is which field of the new-session form is being edited.
+	newField newInstanceField
+	// pathInput is the raw text typed into the directory field.
+	pathInput string
+	// pathCandidates are the directory completions for the current pathInput,
+	// recomputed whenever the text changes.
+	pathCandidates []string
+	// pathCycle is the candidate the next Tab press should offer.
+	pathCycle int
+	// loadErr holds a storage read failure so it can be surfaced once the UI is up.
+	loadErr error
+
+	// winWidth/winHeight are the last known dimensions of the whole terminal.
+	// Attaching hands the agent the entire window, so we need them.
+	winWidth, winHeight int
 
 	// keySent is used to manage underlining menu items
 	keySent bool
@@ -132,11 +158,15 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
 
-	// Load saved instances
+	// Load saved instances. A record we cannot read must not stop the coordinator
+	// from opening — it opens with an empty list, keeps the file untouched, and
+	// reports the problem.
 	instances, err := storage.LoadInstances()
 	if err != nil {
-		fmt.Printf("Failed to load instances: %v\n", err)
-		os.Exit(1)
+		log.ErrorLog.Printf("failed to load instances: %v", err)
+		config.BackupStateFile()
+		h.loadErr = err
+		instances = nil
 	}
 
 	// Add loaded instances to the list
@@ -154,6 +184,8 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 // updateHandleWindowSizeEvent sets the sizes of the components.
 // The components will try to render inside their bounds.
 func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
+	m.winWidth, m.winHeight = msg.Width, msg.Height
+
 	// List takes 30% of width, preview takes 70%
 	listWidth := int(float32(msg.Width) * 0.3)
 	tabsWidth := msg.Width - listWidth
@@ -183,14 +215,20 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 func (m *home) Init() tea.Cmd {
 	// Upon starting, we want to start the spinner. Whenever we get a spinner.TickMsg, we
 	// update the spinner, which sends a new spinner.TickMsg. I think this lasts forever lol.
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		m.spinner.Tick,
 		func() tea.Msg {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
 		},
 		tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.list.GetSelectedInstance()),
-	)
+	}
+	if m.loadErr != nil {
+		err := m.loadErr
+		m.loadErr = nil
+		cmds = append(cmds, func() tea.Msg { return err })
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -238,8 +276,16 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case metadataUpdateDoneMsg:
 		for _, r := range msg.results {
 			// Skip instances that were paused while metadata was being computed
-			if r.instance.Status == session.Paused {
+			if r.instance == nil || r.instance.Status == session.Paused {
 				continue
+			}
+			if r.dirMissing {
+				r.instance.SetStatus(session.Orphaned)
+				continue
+			}
+			if r.instance.Status == session.Orphaned {
+				// The directory came back; let the normal status detection resume.
+				r.instance.SetStatus(session.Ready)
 			}
 			if r.updated {
 				r.instance.SetStatus(session.Running)
@@ -274,20 +320,6 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.tabbedWindow.ScrollDown()
 				}
 			}
-		}
-		return m, nil
-	case branchSearchDebounceMsg:
-		// Debounce timer fired — check if this is still the current filter version
-		if m.textInputOverlay == nil {
-			return m, nil
-		}
-		if msg.version != m.textInputOverlay.BranchFilterVersion() {
-			return m, nil // stale, a newer debounce is pending
-		}
-		return m, m.runBranchSearch(msg.filter, msg.version)
-	case branchSearchResultMsg:
-		if m.textInputOverlay != nil {
-			m.textInputOverlay.SetBranchResults(msg.branches, msg.version)
 		}
 		return m, nil
 	case tea.KeyMsg:
@@ -384,6 +416,151 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keydownCallback(name)), true
 }
 
+// newBlankInstance builds the empty session the creation form fills in. The
+// launch directory is only a suggested default; the mode follows the saved
+// preference.
+func (m *home) newBlankInstance() (*session.Instance, error) {
+	return session.NewInstance(session.InstanceOptions{
+		Title:   "",
+		Path:    homePrefix,
+		Program: m.program,
+	})
+}
+
+// beginNewInstance puts the app into the inline creation form.
+func (m *home) beginNewInstance(instance *session.Instance) {
+	m.newInstanceFinalizer = m.list.AddInstance(instance)
+	m.list.SetSelectedInstance(m.list.NumInstances() - 1)
+	m.state = stateNew
+	m.menu.SetState(ui.StateNewInstance)
+	m.newField = fieldTitle
+	m.setPathInput(homePrefix)
+	m.list.SetNewInstanceHint(m.newInstanceHint(instance))
+}
+
+// setPathInput replaces the typed directory and refreshes its completions.
+func (m *home) setPathInput(v string) {
+	m.pathInput = v
+	m.pathCandidates = completeDirs(v)
+	m.pathCycle = 0
+}
+
+// cancelNewInstance drops the half-created session and returns to the list.
+// Nothing was created yet at this point, so nothing needs undoing.
+func (m *home) cancelNewInstance() tea.Cmd {
+	m.list.Kill()
+	m.list.SetNewInstanceHint("")
+	m.newField = fieldTitle
+	m.setPathInput("")
+	m.promptAfterName = false
+	m.state = stateDefault
+	m.instanceChanged()
+	return tea.Sequence(
+		tea.WindowSize(),
+		func() tea.Msg {
+			m.menu.SetState(ui.StateDefault)
+			return nil
+		},
+	)
+}
+
+// newInstanceHint is the second line shown under the session being created:
+// which field has focus and what is in it.
+func (m *home) newInstanceHint(instance *session.Instance) string {
+	switch m.newField {
+	case fieldPath:
+		// Kept short on purpose: the list pane is narrow and the path itself is
+		// what the developer needs to read.
+		switch n := len(m.pathCandidates); {
+		case n == 0:
+			return fmt.Sprintf("dir: %s_ [no match]", m.pathInput)
+		case n == 1:
+			return fmt.Sprintf("dir: %s_ [tab]", m.pathInput)
+		default:
+			return fmt.Sprintf("dir: %s_ [tab %d]", m.pathInput, n)
+		}
+	default:
+		return "title  (enter to confirm)"
+	}
+}
+
+// handleNewInstanceField drives the working-directory field of the creation
+// form. The directory is immutable once the session starts, so this is the only
+// place it can be set.
+func (m *home) handleNewInstanceField(msg tea.KeyMsg, instance *session.Instance) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		// Existence and writability are checked here so the developer stays on
+		// the directory field, with the typed value preserved, if it is wrong.
+		resolved, err := session.ResolvePath(m.pathInput)
+		if err != nil {
+			return m, m.handleError(err)
+		}
+		if err := session.ValidateWorkingDir(resolved); err != nil {
+			return m, m.handleError(err)
+		}
+		if err := instance.SetPath(m.pathInput); err != nil {
+			return m, m.handleError(err)
+		}
+		return m.startNewInstance(instance)
+	case tea.KeyTab:
+		completed, next, cycled := completePath(m.pathInput, m.pathCandidates, m.pathCycle)
+		candidates := m.pathCandidates
+		m.setPathInput(completed)
+		if cycled {
+			m.pathCandidates = candidates
+		}
+		m.pathCycle = next
+	case tea.KeyRunes:
+		m.setPathInput(m.pathInput + string(msg.Runes))
+	case tea.KeySpace:
+		m.setPathInput(m.pathInput + " ")
+	case tea.KeyBackspace:
+		runes := []rune(m.pathInput)
+		if len(runes) > 0 {
+			m.setPathInput(string(runes[:len(runes)-1]))
+		}
+	case tea.KeyEsc:
+		return m, m.cancelNewInstance()
+	}
+	m.list.SetNewInstanceHint(m.newInstanceHint(instance))
+	return m, nil
+}
+
+// startNewInstance finalizes the form: either hand off to the prompt overlay or
+// start the agent right away.
+func (m *home) startNewInstance(instance *session.Instance) (tea.Model, tea.Cmd) {
+	m.newField = fieldTitle
+	m.list.SetNewInstanceHint("")
+
+	// If promptAfterName, show the prompt overlay before starting
+	if m.promptAfterName {
+		m.promptAfterName = false
+		m.state = statePrompt
+		m.menu.SetState(ui.StatePrompt)
+		m.textInputOverlay = m.newPromptOverlay()
+		return m, tea.WindowSize()
+	}
+
+	// Set Loading status and finalize into the list immediately
+	instance.SetStatus(session.Loading)
+	m.newInstanceFinalizer()
+	m.state = stateDefault
+	m.menu.SetState(ui.StateDefault)
+
+	// Return a tea.Cmd that runs instance.Start in the background
+	startCmd := func() tea.Msg {
+		err := instance.Start(true)
+		return instanceStartedMsg{
+			instance:        instance,
+			err:             err,
+			promptAfterName: false,
+		}
+	}
+
+	return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
+}
+
 func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	cmd, returnEarly := m.handleMenuHighlighting(msg)
 	if returnEarly {
@@ -397,55 +574,27 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	if m.state == stateNew {
 		// Handle quit commands first. Don't handle q because the user might want to type that.
 		if msg.String() == "ctrl+c" {
-			m.state = stateDefault
-			m.promptAfterName = false
-			m.list.Kill()
-			return m, tea.Sequence(
-				tea.WindowSize(),
-				func() tea.Msg {
-					m.menu.SetState(ui.StateDefault)
-					return nil
-				},
-			)
+			return m, m.cancelNewInstance()
 		}
 
 		instance := m.list.GetInstances()[m.list.NumInstances()-1]
+
+		// The directory and mode fields have their own key handling.
+		if m.newField == fieldPath {
+			return m.handleNewInstanceField(msg, instance)
+		}
+
 		switch msg.Type {
 		// Start the instance (enable previews etc) and go back to the main menu state.
 		case tea.KeyEnter:
 			if len(instance.Title) == 0 {
 				return m, m.handleError(fmt.Errorf("title cannot be empty"))
 			}
-
-			// If promptAfterName, show prompt+branch overlay before starting
-			if m.promptAfterName {
-				m.promptAfterName = false
-				m.state = statePrompt
-				m.menu.SetState(ui.StatePrompt)
-				m.textInputOverlay = m.newPromptOverlay()
-				// Trigger initial branch search (no debounce, version 0)
-				initialSearch := m.runBranchSearch("", m.textInputOverlay.BranchFilterVersion())
-				return m, tea.Batch(tea.WindowSize(), initialSearch)
-			}
-
-			// Set Loading status and finalize into the list immediately
-			instance.SetStatus(session.Loading)
-			m.newInstanceFinalizer()
-			m.promptAfterName = false
-			m.state = stateDefault
-			m.menu.SetState(ui.StateDefault)
-
-			// Return a tea.Cmd that runs instance.Start in the background
-			startCmd := func() tea.Msg {
-				err := instance.Start(true)
-				return instanceStartedMsg{
-					instance:        instance,
-					err:             err,
-					promptAfterName: false,
-				}
-			}
-
-			return m, tea.Batch(tea.WindowSize(), m.instanceChanged(), startCmd)
+			// Move on to the working directory field, anchored at home.
+			m.newField = fieldPath
+			m.setPathInput(homePrefix)
+			m.list.SetNewInstanceHint(m.newInstanceHint(instance))
+			return m, nil
 		case tea.KeyRunes:
 			if runewidth.StringWidth(instance.Title) >= 32 {
 				return m, m.handleError(fmt.Errorf("title cannot be longer than 32 characters"))
@@ -466,19 +615,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				return m, m.handleError(err)
 			}
 		case tea.KeyEsc:
-			m.list.Kill()
-			m.state = stateDefault
-			m.instanceChanged()
-
-			return m, tea.Sequence(
-				tea.WindowSize(),
-				func() tea.Msg {
-					m.menu.SetState(ui.StateDefault)
-					return nil
-				},
-			)
+			return m, m.cancelNewInstance()
 		default:
 		}
+		m.list.SetNewInstanceHint(m.newInstanceHint(instance))
 		return m, nil
 	} else if m.state == statePrompt {
 		// Handle cancel via ctrl+c before delegating to the overlay
@@ -487,7 +627,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		// Use the new TextInputOverlay component to handle all key events
-		shouldClose, branchFilterChanged := m.textInputOverlay.HandleKeyPress(msg)
+		shouldClose := m.textInputOverlay.HandleKeyPress(msg)
 
 		// Check if the form was submitted or canceled
 		if shouldClose {
@@ -502,14 +642,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 			if m.textInputOverlay.IsSubmitted() {
 				prompt := m.textInputOverlay.GetValue()
-				selectedBranch := m.textInputOverlay.GetSelectedBranch()
 				selectedProgram := m.textInputOverlay.GetSelectedProgram()
 
 				if !selected.Started() {
-					// Shift+N flow: instance not started yet — set branch, start, then send prompt
-					if selectedBranch != "" {
-						selected.SetSelectedBranch(selectedBranch)
-					}
+					// Shift+N flow: instance not started yet — start, then send prompt
 					if selectedProgram != "" {
 						selected.Program = selectedProgram
 					}
@@ -528,7 +664,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 							instance:        selected,
 							err:             err,
 							promptAfterName: false,
-							selectedBranch:  selectedBranch,
 						}
 					}
 
@@ -552,13 +687,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 					return nil
 				},
 			)
-		}
-
-		// Schedule a debounced branch search if the filter changed
-		if branchFilterChanged {
-			filter := m.textInputOverlay.BranchFilter()
-			version := m.textInputOverlay.BranchFilterVersion()
-			return m, m.scheduleBranchSearch(filter, version)
 		}
 
 		return m, nil
@@ -615,48 +743,25 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
 		}
 
-		// Start a background fetch so branches are up to date by the time the picker opens
-		fetchCmd := func() tea.Msg {
-			currentDir, _ := os.Getwd()
-			git.FetchBranches(currentDir)
-			return nil
-		}
-
-		instance, err := session.NewInstance(session.InstanceOptions{
-			Title:   "",
-			Path:    ".",
-			Program: m.program,
-		})
+		instance, err := m.newBlankInstance()
 		if err != nil {
 			return m, m.handleError(err)
 		}
 
-		m.newInstanceFinalizer = m.list.AddInstance(instance)
-		m.list.SetSelectedInstance(m.list.NumInstances() - 1)
-		m.state = stateNew
-		m.menu.SetState(ui.StateNewInstance)
+		m.beginNewInstance(instance)
 		m.promptAfterName = true
-
-		return m, fetchCmd
+		return m, nil
 	case keys.KeyNew:
 		if m.list.NumInstances() >= GlobalInstanceLimit {
 			return m, m.handleError(
 				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
 		}
-		instance, err := session.NewInstance(session.InstanceOptions{
-			Title:   "",
-			Path:    ".",
-			Program: m.program,
-		})
+		instance, err := m.newBlankInstance()
 		if err != nil {
 			return m, m.handleError(err)
 		}
 
-		m.newInstanceFinalizer = m.list.AddInstance(instance)
-		m.list.SetSelectedInstance(m.list.NumInstances() - 1)
-		m.state = stateNew
-		m.menu.SetState(ui.StateNewInstance)
-
+		m.beginNewInstance(instance)
 		return m, nil
 	case keys.KeyUp:
 		m.list.Up()
@@ -682,26 +787,11 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		// Create the kill action as a tea.Cmd
 		killAction := func() tea.Msg {
-			// Get worktree and check if branch is checked out
-			worktree, err := selected.GetGitWorktree()
-			if err != nil {
-				return err
-			}
-
-			checkedOut, err := worktree.IsBranchCheckedOut()
-			if err != nil {
-				return err
-			}
-
-			if checkedOut {
-				return fmt.Errorf("instance %s is currently checked out", selected.Title)
-			}
-
 			// Clean up terminal session for this instance
-			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
+			m.tabbedWindow.CleanupTerminalForInstance(selected.ID())
 
 			// Delete from storage first
-			if err := m.storage.DeleteInstance(selected.Title); err != nil {
+			if err := m.storage.DeleteInstance(selected.ID()); err != nil {
 				return err
 			}
 
@@ -711,46 +801,32 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		// Show confirmation modal
-		message := fmt.Sprintf("[!] Kill session '%s'?", selected.Title)
+		message := fmt.Sprintf(
+			"[!] Kill session '%s'? Only the terminal is closed; the directory is untouched.",
+			selected.Title)
 		return m, m.confirmAction(message, killAction)
-	case keys.KeySubmit:
+	case keys.KeyPause:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
 
-		// Create the push action as a tea.Cmd
-		pushAction := func() tea.Msg {
-			// Default commit message with timestamp
-			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s", selected.Title, time.Now().Format(time.RFC822))
-			worktree, err := selected.GetGitWorktree()
-			if err != nil {
-				return err
-			}
-			if err = worktree.PushChanges(commitMsg, true); err != nil {
-				return err
-			}
-			return nil
+		if selected.Orphaned() {
+			return m, m.handleError(fmt.Errorf(
+				"session '%s' lost its directory — kill it instead of pausing", selected.Title))
 		}
-
-		// Show confirmation modal
-		message := fmt.Sprintf("[!] Push changes from session '%s'?", selected.Title)
-		return m, m.confirmAction(message, pushAction)
-	case keys.KeyCheckout:
-		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
-			return m, nil
+		if selected.Paused() {
+			return m, m.handleError(fmt.Errorf("session '%s' is already paused", selected.Title))
 		}
 
 		// Show help screen before pausing
-		m.showHelpScreen(helpTypeInstanceCheckout{}, func() {
+		return m.showHelpScreen(helpTypeInstancePause{}, func() {
 			if err := selected.Pause(); err != nil {
 				m.handleError(err)
 			}
-			m.tabbedWindow.CleanupTerminalForInstance(selected.Title)
+			m.tabbedWindow.CleanupTerminalForInstance(selected.ID())
 			m.instanceChanged()
 		})
-		return m, nil
 	case keys.KeyMoveUp:
 		if m.list.MoveUp() {
 			if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
@@ -772,6 +848,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
+		if !selected.Paused() {
+			return m, m.handleError(fmt.Errorf("session '%s' is not paused", selected.Title))
+		}
 		if err := selected.Resume(); err != nil {
 			return m, m.handleError(err)
 		}
@@ -781,12 +860,23 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Paused() || selected.Status == session.Loading || !selected.TmuxAlive() {
+		if selected == nil || selected.Status == session.Loading {
+			return m, nil
+		}
+		if selected.Paused() {
+			return m, m.handleError(fmt.Errorf(
+				"session '%s' is paused — resume it first", selected.Title))
+		}
+		if selected.Orphaned() {
+			return m, m.handleError(fmt.Errorf(
+				"session '%s' lost its directory — kill it", selected.Title))
+		}
+		if !selected.TmuxAlive() {
 			return m, nil
 		}
 		// Terminal tab: attach to terminal session
 		if m.tabbedWindow.IsInTerminalTab() {
-			m.showHelpScreen(helpTypeInstanceAttach{}, func() {
+			return m.showHelpScreen(helpTypeInstanceAttach{}, func() {
 				ch, err := m.tabbedWindow.AttachTerminal()
 				if err != nil {
 					m.handleError(err)
@@ -794,11 +884,20 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				}
 				<-ch
 				m.state = stateDefault
+				m.restorePreviewSize()
 			})
-			return m, nil
 		}
 		// Show help screen before attaching
-		m.showHelpScreen(helpTypeInstanceAttach{}, func() {
+		return m.showHelpScreen(helpTypeInstanceAttach{}, func() {
+			// Hand the agent the whole terminal. Its session is sized for the
+			// preview pane while detached, and it would otherwise stay that
+			// small — a window's worth of screen showing a pane's worth of agent.
+			if m.winWidth > 0 && m.winHeight > 0 {
+				if err := selected.SetPreviewSize(m.winWidth, m.winHeight); err != nil {
+					log.ErrorLog.Print(err)
+				}
+			}
+
 			ch, err := m.list.Attach()
 			if err != nil {
 				m.handleError(err)
@@ -806,11 +905,27 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			}
 			<-ch
 			m.state = stateDefault
+			// Attaching resized the agent's terminal to the whole window. Put it
+			// back to the preview shape right here, rather than waiting for the
+			// next resize event to notice.
+			m.restorePreviewSize()
 			m.instanceChanged()
 		})
-		return m, nil
 	default:
 		return m, nil
+	}
+}
+
+// restorePreviewSize re-applies the preview dimensions to every session's
+// terminal. Called after detaching, when the attached session was resized to the
+// full window and would otherwise render at the wrong shape inside the pane.
+func (m *home) restorePreviewSize() {
+	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
+	if previewWidth <= 0 || previewHeight <= 0 {
+		return
+	}
+	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
+		log.ErrorLog.Print(err)
 	}
 }
 
@@ -862,42 +977,6 @@ type instanceStartedMsg struct {
 	instance        *session.Instance
 	err             error
 	promptAfterName bool
-	selectedBranch  string
-}
-
-// branchSearchDebounceMsg fires after the debounce interval to trigger a search.
-type branchSearchDebounceMsg struct {
-	filter  string
-	version uint64
-}
-
-// branchSearchResultMsg carries search results back to Update.
-type branchSearchResultMsg struct {
-	branches []string
-	version  uint64
-}
-
-const branchSearchDebounce = 150 * time.Millisecond
-
-// scheduleBranchSearch returns a debounced tea.Cmd: sleeps, then triggers a search message.
-func (m *home) scheduleBranchSearch(filter string, version uint64) tea.Cmd {
-	return func() tea.Msg {
-		time.Sleep(branchSearchDebounce)
-		return branchSearchDebounceMsg{filter: filter, version: version}
-	}
-}
-
-// runBranchSearch returns a tea.Cmd that performs the git search in the background.
-func (m *home) runBranchSearch(filter string, version uint64) tea.Cmd {
-	return func() tea.Msg {
-		currentDir, _ := os.Getwd()
-		branches, err := git.SearchBranches(currentDir, filter)
-		if err != nil {
-			log.WarningLog.Printf("branch search failed: %v", err)
-			return nil
-		}
-		return branchSearchResultMsg{branches: branches, version: version}
-	}
 }
 
 // instanceMetaResult holds the results of a single instance's metadata update,
@@ -907,6 +986,8 @@ type instanceMetaResult struct {
 	updated   bool
 	hasPrompt bool
 	diffStats *git.DiffStats
+	// dirMissing is true when the session's working directory no longer exists.
+	dirMissing bool
 }
 
 // metadataUpdateDoneMsg is sent when the background metadata update completes.
@@ -967,6 +1048,11 @@ func tickUpdateMetadataCmd(active []*session.Instance, selected *session.Instanc
 				defer wg.Done()
 				r := &results[i]
 				r.instance = instance
+				// A session whose directory vanished is orphaned rather than left
+				// spinning forever.
+				if r.dirMissing = !instance.WorkingDirExists(); r.dirMissing {
+					return
+				}
 				r.updated, r.hasPrompt = instance.HasUpdated()
 				if instance == selected {
 					r.diffStats = instance.ComputeDiff()
@@ -997,7 +1083,7 @@ func (m *home) handleError(err error) tea.Cmd {
 }
 
 func (m *home) newPromptOverlay() *overlay.TextInputOverlay {
-	return overlay.NewTextInputOverlayWithBranchPicker("Enter prompt", "", m.appConfig.GetProfiles())
+	return overlay.NewTextInputOverlayWithProfiles("Enter prompt", "", m.appConfig.GetProfiles())
 }
 
 // cancelPromptOverlay cancels the prompt overlay, cleaning up unstarted instances.

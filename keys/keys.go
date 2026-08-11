@@ -13,14 +13,11 @@ const (
 	KeyNew
 	KeyKill
 	KeyQuit
-	KeyReview
-	KeyPush
-	KeySubmit
 
 	KeyTab        // Tab is a special keybinding for switching between panes.
 	KeySubmitName // SubmitName is a special keybinding for submitting the name of a new instance.
 
-	KeyCheckout
+	KeyPause
 	KeyResume
 	KeyPrompt // New key for entering a prompt
 	KeyHelp   // Key for showing help screen
@@ -51,9 +48,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"D":          KeyKill,
 	"q":          KeyQuit,
 	"tab":        KeyTab,
-	"c":          KeyCheckout,
+	"c":          KeyPause,
 	"r":          KeyResume,
-	"p":          KeySubmit,
 	"?":          KeyHelp,
 }
 
@@ -95,17 +91,13 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithKeys("q"),
 		key.WithHelp("q", "quit"),
 	),
-	KeySubmit: key.NewBinding(
-		key.WithKeys("p"),
-		key.WithHelp("p", "push branch"),
-	),
 	KeyPrompt: key.NewBinding(
 		key.WithKeys("N"),
 		key.WithHelp("N", "new with prompt"),
 	),
-	KeyCheckout: key.NewBinding(
+	KeyPause: key.NewBinding(
 		key.WithKeys("c"),
-		key.WithHelp("c", "checkout"),
+		key.WithHelp("c", "pause"),
 	),
 	KeyTab: key.NewBinding(
 		key.WithKeys("tab"),
