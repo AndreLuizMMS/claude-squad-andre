@@ -296,3 +296,25 @@ func TestSaveConfig(t *testing.T) {
 		assert.Equal(t, testConfig.DaemonPollInterval, loadedConfig.DaemonPollInterval)
 	})
 }
+
+func TestGetEditorCommand(t *testing.T) {
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "")
+
+	cfg := &Config{}
+	assert.Equal(t, []string{defaultEditor}, cfg.GetEditorCommand(), "falls back to the default")
+
+	t.Setenv("EDITOR", "vim")
+	assert.Equal(t, []string{"vim"}, cfg.GetEditorCommand(), "$EDITOR is used when nothing else says otherwise")
+
+	t.Setenv("VISUAL", "code --wait")
+	assert.Equal(t, []string{"code", "--wait"}, cfg.GetEditorCommand(), "$VISUAL wins over $EDITOR, arguments included")
+
+	cfg.EditorCommand = "cursor"
+	assert.Equal(t, []string{"cursor"}, cfg.GetEditorCommand(), "configuration wins over the environment")
+}
+
+func TestGetMaxSessions(t *testing.T) {
+	assert.Equal(t, defaultMaxSessions, (&Config{}).GetMaxSessions())
+	assert.Equal(t, 25, (&Config{MaxSessions: 25}).GetMaxSessions())
+}

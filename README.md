@@ -73,6 +73,8 @@ cs -p "codex"
 | `c` | Pausar: fecha o terminal e mantém a sessão |
 | `r` | Retomar uma sessão pausada |
 | `D` | Encerrar a sessão selecionada |
+| `R` | Renomear a sessão selecionada |
+| `e` | Abrir o diretório da sessão no editor |
 | `↑/j`, `↓/k` | Navegar entre sessões |
 | `J`/`K` | Reordenar sessões |
 | `tab` | Alternar entre as abas |
@@ -88,6 +90,8 @@ Fica em `~/.claude-squad/config.json` (confirme o caminho com `cs debug`).
 {
   "default_program": "claude",
   "disable_bell": false,
+  "editor_command": "cursor",
+  "max_sessions": 10,
   "profiles": [
     { "name": "claude", "program": "claude" },
     { "name": "codex", "program": "codex" }
@@ -99,6 +103,8 @@ Fica em `~/.claude-squad/config.json` (confirme o caminho com `cs debug`).
 |---|---|
 | `default_program` | Agente usado ao criar sessões |
 | `disable_bell` | `true` desliga o som tocado quando um agente devolve a vez |
+| `editor_command` | Comando que a tecla `e` usa para abrir o diretório. Vazio: usa `$VISUAL`, depois `$EDITOR`, depois `cursor` |
+| `max_sessions` | Quantas sessões cabem ao mesmo tempo (padrão 10) |
 | `profiles` | Agentes disponíveis no seletor da criação de sessão |
 
 ## Licença

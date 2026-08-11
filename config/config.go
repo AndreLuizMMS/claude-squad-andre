@@ -45,6 +45,40 @@ type Config struct {
 	// working and hands the turn back. Off by default, so the sound is on for
 	// configurations written before this option existed.
 	DisableBell bool `json:"disable_bell,omitempty"`
+	// EditorCommand opens the working directory of a session. Empty falls back to
+	// $VISUAL, then $EDITOR, then the default below.
+	EditorCommand string `json:"editor_command,omitempty"`
+	// MaxSessions caps how many sessions can exist at once. Zero means the
+	// default.
+	MaxSessions int `json:"max_sessions,omitempty"`
+}
+
+const (
+	// defaultEditor is what opens a session's directory when nothing else says
+	// otherwise.
+	defaultEditor = "cursor"
+	// defaultMaxSessions is how many sessions one coordinator holds by default.
+	defaultMaxSessions = 10
+)
+
+// GetEditorCommand returns the command that opens a session directory, split
+// into program and arguments. Configuration wins over the environment, and the
+// environment over the default.
+func (c *Config) GetEditorCommand() []string {
+	for _, candidate := range []string{c.EditorCommand, os.Getenv("VISUAL"), os.Getenv("EDITOR")} {
+		if fields := strings.Fields(candidate); len(fields) > 0 {
+			return fields
+		}
+	}
+	return []string{defaultEditor}
+}
+
+// GetMaxSessions returns the configured session cap, or the default when unset.
+func (c *Config) GetMaxSessions() int {
+	if c.MaxSessions > 0 {
+		return c.MaxSessions
+	}
+	return defaultMaxSessions
 }
 
 // GetProgram returns the program to run. If Profiles is non-empty and
