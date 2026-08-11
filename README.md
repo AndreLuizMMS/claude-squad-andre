@@ -98,8 +98,8 @@ The menu at the bottom of the screen shows available commands:
 - `↑/j`, `↓/k` - Navigate between sessions
 
 ##### Actions
-- `↵/o` - Attach to the selected session to reprompt
-- `ctrl-q` - Detach from session
+- `↵/o` - Type into the selected session, keeping the list on screen
+- `ctrl-l` - Stop typing into a session and go back to the list and tabs
 - `c` - Pause: close the terminal and keep the session
 - `r` - Resume a paused session
 - `?` - Show help menu
