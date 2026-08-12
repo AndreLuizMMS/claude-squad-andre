@@ -154,7 +154,7 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// Navigation group (when the pane has history to scroll)
-	if m.activeTab == TerminalTab {
+	if m.activeTab != PreviewTab {
 		actionGroup = append(actionGroup, keys.KeyShiftUp)
 	}
 

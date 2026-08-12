@@ -6,6 +6,7 @@ import (
 	"claude-squad/session/tmux"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 
@@ -25,8 +26,9 @@ type terminalSession struct {
 	worktreePath string
 }
 
-// TerminalPane manages shell tmux sessions in the worktree directory of selected instances.
+// TerminalPane manages tmux sessions in the worktree directory of selected instances.
 // Sessions are cached per instance so switching between instances preserves terminal state.
+// The pane runs whatever program it was built with: a login shell, or a CLI agent.
 type TerminalPane struct {
 	mu            sync.Mutex
 	width, height int
@@ -36,15 +38,30 @@ type TerminalPane struct {
 	fallback      bool
 	fallbackText  string
 
+	prefix  string // tmux session name prefix, keeps panes from colliding
+	program string // command run inside the session; empty means $SHELL
+
 	isScrolling bool
 	viewport    viewport.Model
 }
 
-func NewTerminalPane() *TerminalPane {
+func newTerminalPane(prefix, program string) *TerminalPane {
 	return &TerminalPane{
 		sessions: make(map[string]*terminalSession),
 		viewport: viewport.New(0, 0),
+		prefix:   prefix,
+		program:  program,
 	}
+}
+
+// NewTerminalPane creates a pane running the user's shell.
+func NewTerminalPane() *TerminalPane {
+	return newTerminalPane("term_", "")
+}
+
+// NewAgentPane creates a pane running the Cursor CLI (`agent`).
+func NewAgentPane() *TerminalPane {
+	return newTerminalPane("agent_", "agent")
 }
 
 func (t *TerminalPane) SetSize(width, height int) {
@@ -93,8 +110,13 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 	}
 
 	// Ensure we have a terminal session for this instance
+	t.fallback = false
 	if err := t.ensureSessionLocked(instance); err != nil {
 		return err
+	}
+	// ensureSessionLocked already explained why there is nothing to show.
+	if t.fallback {
+		return nil
 	}
 
 	s, ok := t.sessions[t.currentTitle]
@@ -143,20 +165,28 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 		delete(t.sessions, instance.ID())
 	}
 
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
+	program := t.program
+	if program == "" {
+		program = os.Getenv("SHELL")
+		if program == "" {
+			program = "/bin/sh"
+		}
+	} else if _, err := exec.LookPath(program); err != nil {
+		// A missing binary would make tmux start and die immediately, leaving
+		// only a generic "unavailable" message. Name the actual problem.
+		t.setFallbackState(fmt.Sprintf("Comando '%s' não encontrado no PATH.", program))
+		return nil
 	}
 
-	termName := "term_" + instance.ID()
-	ts := tmux.NewTmuxSession(termName, shell)
+	termName := t.prefix + instance.ID()
+	ts := tmux.NewTmuxSession(termName, program)
 
 	// Check if session already exists (e.g. from a previous run)
 	if ts.DoesSessionExist() {
 		if err := ts.Restore(); err != nil {
 			// Session exists but can't restore, kill it and start fresh
 			_ = ts.Close()
-			ts = tmux.NewTmuxSession(termName, shell)
+			ts = tmux.NewTmuxSession(termName, program)
 			if err := ts.Start(worktreePath); err != nil {
 				return fmt.Errorf("terminal pane: failed to start session: %w", err)
 			}

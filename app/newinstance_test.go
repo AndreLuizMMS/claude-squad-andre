@@ -30,7 +30,7 @@ func newTestHome(t *testing.T) *home {
 	sp := spinner.New()
 	h.spinner = sp
 	h.list = ui.NewList(&h.spinner, false)
-	h.tabbedWindow = ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewTerminalPane())
+	h.tabbedWindow = ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewTerminalPane(), ui.NewAgentPane())
 	return h
 }
 

@@ -3,6 +3,8 @@ package ui
 import (
 	"claude-squad/log"
 	"claude-squad/session"
+	"fmt"
+
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -32,6 +34,7 @@ var (
 
 const (
 	PreviewTab int = iota
+	AgentTab
 	TerminalTab
 )
 
@@ -51,18 +54,33 @@ type TabbedWindow struct {
 
 	preview  *PreviewPane
 	terminal *TerminalPane
+	agent    *TerminalPane
 	instance *session.Instance
 }
 
-func NewTabbedWindow(preview *PreviewPane, terminal *TerminalPane) *TabbedWindow {
+func NewTabbedWindow(preview *PreviewPane, terminal, agent *TerminalPane) *TabbedWindow {
 	return &TabbedWindow{
 		tabs: []string{
-			"Prévia",
-			"Terminal",
+			"Claude Code",
+			"Cursor CLI",
+			"Bash $",
 		},
 		preview:  preview,
 		terminal: terminal,
+		agent:    agent,
 	}
+}
+
+// activeTerminal returns the shell-backed pane for the active tab, or nil when
+// the preview tab is active.
+func (w *TabbedWindow) activeTerminal() *TerminalPane {
+	switch w.activeTab {
+	case TerminalTab:
+		return w.terminal
+	case AgentTab:
+		return w.agent
+	}
+	return nil
 }
 
 func (w *TabbedWindow) SetInstance(instance *session.Instance) {
@@ -94,6 +112,7 @@ func (w *TabbedWindow) SetSize(width, height int) {
 
 	w.preview.SetSize(contentWidth, contentHeight)
 	w.terminal.SetSize(contentWidth, contentHeight)
+	w.agent.SetSize(contentWidth, contentHeight)
 }
 
 func (w *TabbedWindow) GetPreviewSize() (width, height int) {
@@ -112,12 +131,13 @@ func (w *TabbedWindow) UpdatePreview(instance *session.Instance) error {
 	return w.preview.UpdateContent(instance)
 }
 
-// UpdateTerminal updates the terminal pane content. Only updates when terminal tab is active.
+// UpdateTerminal updates the active shell pane content (terminal or Cursor).
 func (w *TabbedWindow) UpdateTerminal(instance *session.Instance) error {
-	if w.activeTab != TerminalTab {
+	pane := w.activeTerminal()
+	if pane == nil {
 		return nil
 	}
-	return w.terminal.UpdateContent(instance)
+	return pane.UpdateContent(instance)
 }
 
 // ResetPreviewToNormalMode resets the preview pane to normal mode
@@ -127,30 +147,26 @@ func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) erro
 
 // Add these new methods for handling scroll events
 func (w *TabbedWindow) ScrollUp() {
-	switch w.activeTab {
-	case PreviewTab:
-		err := w.preview.ScrollUp(w.instance)
-		if err != nil {
-			log.InfoLog.Printf("tabbed window failed to scroll up: %v", err)
-		}
-	case TerminalTab:
-		if err := w.terminal.ScrollUp(); err != nil {
+	if pane := w.activeTerminal(); pane != nil {
+		if err := pane.ScrollUp(); err != nil {
 			log.InfoLog.Printf("tabbed window failed to scroll terminal up: %v", err)
 		}
+		return
+	}
+	if err := w.preview.ScrollUp(w.instance); err != nil {
+		log.InfoLog.Printf("tabbed window failed to scroll up: %v", err)
 	}
 }
 
 func (w *TabbedWindow) ScrollDown() {
-	switch w.activeTab {
-	case PreviewTab:
-		err := w.preview.ScrollDown(w.instance)
-		if err != nil {
-			log.InfoLog.Printf("tabbed window failed to scroll down: %v", err)
-		}
-	case TerminalTab:
-		if err := w.terminal.ScrollDown(); err != nil {
+	if pane := w.activeTerminal(); pane != nil {
+		if err := pane.ScrollDown(); err != nil {
 			log.InfoLog.Printf("tabbed window failed to scroll terminal down: %v", err)
 		}
+		return
+	}
+	if err := w.preview.ScrollDown(w.instance); err != nil {
+		log.InfoLog.Printf("tabbed window failed to scroll down: %v", err)
 	}
 }
 
@@ -159,9 +175,10 @@ func (w *TabbedWindow) IsInPreviewTab() bool {
 	return w.activeTab == PreviewTab
 }
 
-// IsInTerminalTab returns true if the terminal tab is currently active
+// IsInTerminalTab returns true when the active tab is backed by a shell pane
+// (Terminal or Cursor) — both attach and scroll the same way.
 func (w *TabbedWindow) IsInTerminalTab() bool {
-	return w.activeTab == TerminalTab
+	return w.activeTerminal() != nil
 }
 
 // GetActiveTab returns the currently active tab index
@@ -169,19 +186,25 @@ func (w *TabbedWindow) GetActiveTab() int {
 	return w.activeTab
 }
 
-// AttachTerminal attaches to the terminal tmux session
+// AttachTerminal attaches to the tmux session behind the active shell pane.
 func (w *TabbedWindow) AttachTerminal() (chan struct{}, error) {
-	return w.terminal.Attach()
+	pane := w.activeTerminal()
+	if pane == nil {
+		return nil, fmt.Errorf("no terminal session to attach to")
+	}
+	return pane.Attach()
 }
 
-// CleanupTerminal closes the terminal session
+// CleanupTerminal closes the terminal and Cursor sessions
 func (w *TabbedWindow) CleanupTerminal() {
 	w.terminal.Close()
+	w.agent.Close()
 }
 
-// CleanupTerminalForInstance closes the cached terminal session for the given instance title.
+// CleanupTerminalForInstance closes the cached shell sessions for the given instance title.
 func (w *TabbedWindow) CleanupTerminalForInstance(title string) {
 	w.terminal.CloseForInstance(title)
+	w.agent.CloseForInstance(title)
 }
 
 // IsPreviewInScrollMode returns true if the preview pane is in scroll mode
@@ -189,14 +212,17 @@ func (w *TabbedWindow) IsPreviewInScrollMode() bool {
 	return w.preview.isScrolling
 }
 
-// IsTerminalInScrollMode returns true if the terminal pane is in scroll mode
+// IsTerminalInScrollMode returns true if the active shell pane is in scroll mode
 func (w *TabbedWindow) IsTerminalInScrollMode() bool {
-	return w.terminal.IsScrolling()
+	pane := w.activeTerminal()
+	return pane != nil && pane.IsScrolling()
 }
 
-// ResetTerminalToNormalMode exits scroll mode on the terminal pane
+// ResetTerminalToNormalMode exits scroll mode on the active shell pane
 func (w *TabbedWindow) ResetTerminalToNormalMode() {
-	w.terminal.ResetToNormalMode()
+	if pane := w.activeTerminal(); pane != nil {
+		pane.ResetToNormalMode()
+	}
 }
 
 func (w *TabbedWindow) String() string {
@@ -240,12 +266,9 @@ func (w *TabbedWindow) String() string {
 	}
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, renderedTabs...)
-	var content string
-	switch w.activeTab {
-	case PreviewTab:
-		content = w.preview.String()
-	case TerminalTab:
-		content = w.terminal.String()
+	content := w.preview.String()
+	if pane := w.activeTerminal(); pane != nil {
+		content = pane.String()
 	}
 	window := windowStyle.Render(
 		lipgloss.Place(
