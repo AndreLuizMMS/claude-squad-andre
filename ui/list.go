@@ -5,6 +5,7 @@ import (
 	"claude-squad/session"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -86,10 +87,39 @@ var autoYesStyle = lipgloss.NewStyle().
 	Background(lipgloss.Color("#dde4f0")).
 	Foreground(lipgloss.Color("#1a1a1a"))
 
+// groupColors gives each project its own identity in the list. The palette is
+// fixed and picked by hashing the directory name, so a project keeps the same
+// color between runs and across reorderings.
+var groupColors = []lipgloss.Color{
+	lipgloss.Color("#7D56F4"), // roxo
+	lipgloss.Color("#2FA9C4"), // ciano
+	lipgloss.Color("#3FA34D"), // verde
+	lipgloss.Color("#D98324"), // laranja
+	lipgloss.Color("#C44D9B"), // magenta
+	lipgloss.Color("#C4B02F"), // amarelo
+	lipgloss.Color("#4A76D4"), // azul
+	lipgloss.Color("#C4523E"), // vermelho
+}
+
 var groupHeaderStyle = lipgloss.NewStyle().
-	Padding(0, 1).
+	Padding(0, 2).
 	Bold(true).
-	Foreground(lipgloss.AdaptiveColor{Light: "#3A3535", Dark: "#B0AAAA"})
+	Foreground(lipgloss.Color("#101010"))
+
+// groupColor picks a stable color for a project name.
+func groupColor(name string) lipgloss.Color {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	return groupColors[int(h.Sum32())%len(groupColors)]
+}
+
+// renderGroupHeader draws the project name as a colored bar. A terminal has no
+// font size, so weight, case and a filled background are what "bigger" means here.
+func renderGroupHeader(name string) string {
+	return groupHeaderStyle.
+		Background(groupColor(name)).
+		Render(strings.ToUpper(name))
+}
 
 var quotaStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("#ffd23f"))
@@ -395,7 +425,7 @@ func (l *List) String() string {
 			if i > 0 {
 				b.WriteString("\n")
 			}
-			b.WriteString(groupHeaderStyle.Render(header))
+			b.WriteString(renderGroupHeader(header))
 			b.WriteString("\n")
 			group = header
 		}

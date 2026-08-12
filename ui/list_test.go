@@ -173,3 +173,12 @@ func TestBlockedSessionsAreVisitedFirst(t *testing.T) {
 	require.True(t, l.SelectNextAttention())
 	require.Equal(t, 1, l.selectedIdx)
 }
+
+func TestGroupHeaderColorIsStablePerProject(t *testing.T) {
+	// Same project, same color; different projects should not all collapse
+	// onto one color.
+	require.Equal(t, groupColor("cortz"), groupColor("cortz"))
+	require.NotEqual(t, groupColor("cortz"), groupColor("doxar"))
+
+	require.Contains(t, renderGroupHeader("cortz"), "CORTZ")
+}
