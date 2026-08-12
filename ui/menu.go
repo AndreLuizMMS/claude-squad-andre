@@ -9,14 +9,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-var keyStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-	Light: "#655F5F",
-	Dark:  "#7F7A7A",
+var keyStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.AdaptiveColor{
+	Light: "#3A3535",
+	Dark:  "#E8E4E4",
 })
 
 var descStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-	Light: "#7A7474",
-	Dark:  "#9C9494",
+	Light: "#5A5555",
+	Dark:  "#B8B2B2",
 })
 
 var sepStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
@@ -196,8 +196,10 @@ func (m *Menu) String() string {
 			localDescStyle   = descStyle
 		)
 		if m.keyDown == k {
-			localActionStyle = localActionStyle.Underline(true)
-			localKeyStyle = localKeyStyle.Underline(true)
+			// Pressed feedback: invert the key itself so the press reads as an
+			// instant flash, not just an underline that's easy to miss.
+			localActionStyle = localActionStyle.Reverse(true).Bold(true)
+			localKeyStyle = localKeyStyle.Reverse(true).Bold(true)
 			localDescStyle = localDescStyle.Underline(true)
 		}
 
