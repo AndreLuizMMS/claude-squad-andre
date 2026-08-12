@@ -60,7 +60,7 @@ func (h helpTypeGeneral) toContent() string {
 		descStyle.Render("✖           - o agente saiu sozinho; 'r' sobe de novo"),
 		"",
 		headerStyle.Render("Outros:"),
-		keyStyle.Render("tab")+descStyle.Render("       - Alternar entre as abas prévia e terminal"),
+		keyStyle.Render("tab")+descStyle.Render("       - Alternar entre as abas Claude Code, Cursor CLI e Bash"),
 		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Rolar a prévia ou o terminal"),
 		keyStyle.Render("q")+descStyle.Render("         - Sair do aplicativo"),
 	)

@@ -58,7 +58,7 @@ Fluxo: `n` cria a sessão (pede título, diretório — com autocomplete — e a
 | `R` / `e` | Renomear / abrir diretório no editor |
 | `espaço` / `p` | Pular para a próxima sessão que respondeu / mandar prompt sem entrar |
 | `↑↓` `jk` / `J` `K` | Navegar / reordenar |
-| `tab` / `shift-↑↓` | Trocar entre prévia e terminal / rolar a aba |
+| `tab` / `shift-↑↓` | Trocar entre Claude Code, Cursor CLI e Bash / rolar a aba |
 | `?` / `q` | Ajuda / sair |
 
 ## Configuração
