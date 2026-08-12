@@ -69,9 +69,15 @@ func (w *TabbedWindow) SetInstance(instance *session.Instance) {
 	w.instance = instance
 }
 
-// AdjustPreviewWidth adjusts the width of the preview pane to be 90% of the provided width.
+// AdjustPreviewWidth trims a couple columns off the provided width so borders
+// never wrap. A fixed margin instead of a percentage: on a wide terminal a
+// proportional cut throws away a lot of real screen space for no reason.
 func AdjustPreviewWidth(width int) int {
-	return int(float64(width) * 0.9)
+	adjusted := width - 2
+	if adjusted < 1 {
+		adjusted = width
+	}
+	return adjusted
 }
 
 func (w *TabbedWindow) SetSize(width, height int) {

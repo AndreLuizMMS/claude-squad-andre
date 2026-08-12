@@ -1379,12 +1379,16 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 }
 
 func (m *home) View() string {
-	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.list.String())
-	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.tabbedWindow.String())
-	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding)
+	// The list and the window already open with a blank line of their own
+	// (title spacing, tab row) — no extra top padding stacked on here, or the
+	// window starts scrolled down for nothing.
+	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, m.list.String(), m.tabbedWindow.String())
 
+	// Left-aligned: the panes are already sized to add up to the full window
+	// width, so centering the stack only shifts it around unpredictably as the
+	// terminal is resized.
 	mainView := lipgloss.JoinVertical(
-		lipgloss.Center,
+		lipgloss.Left,
 		listAndPreview,
 		m.menu.String(),
 		m.errBox.String(),

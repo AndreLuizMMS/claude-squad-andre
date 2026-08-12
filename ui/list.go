@@ -89,7 +89,7 @@ var autoYesStyle = lipgloss.NewStyle().
 var groupHeaderStyle = lipgloss.NewStyle().
 	Padding(0, 1).
 	Bold(true).
-	Foreground(lipgloss.AdaptiveColor{Light: "#655F5F", Dark: "#8a8a8a"})
+	Foreground(lipgloss.AdaptiveColor{Light: "#3A3535", Dark: "#B0AAAA"})
 
 var quotaStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("#ffd23f"))
@@ -354,9 +354,10 @@ func (l *List) String() string {
 	const titleText = " Sessões "
 	const autoYesText = " auto-yes "
 
-	// Write the title.
+	// Write the title. One blank line on top, matching the tab row's own
+	// leading line on the preview side — not two, which just pushed the list
+	// down without the preview following.
 	var b strings.Builder
-	b.WriteString("\n")
 	b.WriteString("\n")
 
 	// Write title line
