@@ -750,18 +750,17 @@ func claudeProjectDirName(path string) string {
 	return strings.NewReplacer("/", "-", ".", "-").Replace(path)
 }
 
-// computeUsageFromTranscripts finds the most recently modified transcript for
-// workDir under ~/.claude/projects and returns the usage of its last
-// assistant message.
-func computeUsageFromTranscripts(workDir string) *UsageStats {
+// latestTranscript is the most recently modified Claude Code transcript for
+// workDir under ~/.claude/projects, or "" when the agent hasn't written one.
+func latestTranscript(workDir string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return nil
+		return ""
 	}
 	projectDir := filepath.Join(home, ".claude", "projects", claudeProjectDirName(workDir))
 	entries, err := os.ReadDir(projectDir)
 	if err != nil {
-		return nil
+		return ""
 	}
 
 	var latest string
@@ -779,6 +778,14 @@ func computeUsageFromTranscripts(workDir string) *UsageStats {
 			latest = filepath.Join(projectDir, e.Name())
 		}
 	}
+	return latest
+}
+
+// computeUsageFromTranscripts finds the most recently modified transcript for
+// workDir under ~/.claude/projects and returns the usage of its last
+// assistant message.
+func computeUsageFromTranscripts(workDir string) *UsageStats {
+	latest := latestTranscript(workDir)
 	if latest == "" {
 		return nil
 	}
@@ -796,9 +803,10 @@ func computeUsageFromTranscripts(workDir string) *UsageStats {
 	return &UsageStats{Percent: percent}
 }
 
-// lastUsageInFile scans the tail of a transcript file for the last line
-// carrying a usage field.
-func lastUsageInFile(path string) *tokenUsage {
+// transcriptTail reads the last usageTailBytes of a transcript, split into
+// lines. The first line may be a fragment of a longer one and is left for the
+// caller's JSON parsing to discard.
+func transcriptTail(path string) []string {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -820,8 +828,13 @@ func lastUsageInFile(path string) *tokenUsage {
 	if err != nil {
 		return nil
 	}
+	return strings.Split(string(data), "\n")
+}
 
-	lines := strings.Split(string(data), "\n")
+// lastUsageInFile scans the tail of a transcript file for the last line
+// carrying a usage field.
+func lastUsageInFile(path string) *tokenUsage {
+	lines := transcriptTail(path)
 	for idx := len(lines) - 1; idx >= 0; idx-- {
 		line := strings.TrimSpace(lines[idx])
 		if line == "" {
@@ -836,6 +849,54 @@ func lastUsageInFile(path string) *tokenUsage {
 		}
 	}
 	return nil
+}
+
+// titleLine is the subset of the transcript lines Claude Code writes when the
+// conversation has a name: '/rename' writes custom-title, and the naming it
+// does on its own writes ai-title.
+type titleLine struct {
+	Type        string `json:"type"`
+	CustomTitle string `json:"customTitle"`
+	AITitle     string `json:"aiTitle"`
+}
+
+// AgentTitle is the name the agent's own conversation carries, read from its
+// transcript. A name set by hand ('/rename') wins over the one Claude Code
+// picks by itself, whichever was written last. Empty when the conversation has
+// no name yet — a fresh session, or one whose transcript isn't there.
+func (i *Instance) AgentTitle() string {
+	return lastTitleInFile(latestTranscript(i.Path))
+}
+
+// lastTitleInFile scans the tail of a transcript for the conversation's name.
+func lastTitleInFile(path string) string {
+	if path == "" {
+		return ""
+	}
+	lines := transcriptTail(path)
+	aiTitle := ""
+	for idx := len(lines) - 1; idx >= 0; idx-- {
+		line := strings.TrimSpace(lines[idx])
+		if line == "" {
+			continue
+		}
+		var tl titleLine
+		if err := json.Unmarshal([]byte(line), &tl); err != nil {
+			continue
+		}
+		switch tl.Type {
+		case "custom-title":
+			if name := strings.TrimSpace(tl.CustomTitle); name != "" {
+				return name
+			}
+		case "ai-title":
+			// Held, not returned: a custom name further up the tail still wins.
+			if aiTitle == "" {
+				aiTitle = strings.TrimSpace(tl.AITitle)
+			}
+		}
+	}
+	return aiTitle
 }
 
 // SendPrompt sends a prompt to the tmux session

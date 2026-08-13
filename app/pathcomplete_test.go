@@ -101,8 +101,7 @@ func TestDirectoryFieldStartsAtHomeAndCompletesOnTab(t *testing.T) {
 	home := withFakeHome(t, "projects", "proto")
 
 	h := newTestHome(t)
-	startForm(t, h, "auto")
-	pressEnter(h) // -> directory field
+	startForm(t, h)
 
 	assert.Equal(t, homePrefix, h.pathInput,
 		"the directory field always starts at home, not at the launch directory")
@@ -129,8 +128,7 @@ func TestTabFillsTheSharedPartWhenTypingIsAmbiguous(t *testing.T) {
 	withFakeHome(t, "projects", "proto")
 
 	h := newTestHome(t)
-	startForm(t, h, "shared")
-	pressEnter(h)
+	startForm(t, h)
 
 	typeRunes(t, h, "p")
 	press(h, tea.KeyMsg{Type: tea.KeyTab})
@@ -141,8 +139,7 @@ func TestBackspaceRefreshesTheCandidates(t *testing.T) {
 	withFakeHome(t, "projects", "pictures")
 
 	h := newTestHome(t)
-	startForm(t, h, "back")
-	pressEnter(h)
+	startForm(t, h)
 
 	typeRunes(t, h, "pro")
 	assert.Len(t, h.pathCandidates, 1)

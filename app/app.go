@@ -19,7 +19,6 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
 )
 
 // Run is the main entrypoint into the application. It can be launched from
@@ -50,15 +49,6 @@ const (
 	stateRename
 )
 
-// newInstanceField is which field of the new-session form has focus. The form
-// runs inline in the list: title, then working directory.
-type newInstanceField int
-
-const (
-	fieldTitle newInstanceField = iota
-	fieldPath
-)
-
 type home struct {
 	ctx context.Context
 
@@ -85,8 +75,6 @@ type home struct {
 	// promptAfterName tracks if we should enter prompt mode after naming
 	promptAfterName bool
 
-	// newField is which field of the new-session form is being edited.
-	newField newInstanceField
 	// pathInput is the raw text typed into the directory field.
 	pathInput string
 	// pathCandidates are the directory completions for the current pathInput,
@@ -193,9 +181,9 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		armed:        make(map[string]bool),
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
-	if appState.GetViewMosaic() {
-		h.viewMode = viewMosaic
-	}
+	// Always start in mosaic: it's the default view, toggle only affects the
+	// current session, not what the next launch opens into.
+	h.viewMode = viewMosaic
 	h.menu.SetInMosaic(h.viewMode == viewMosaic)
 
 	// Load saved instances. A record we cannot read must not stop the coordinator
@@ -448,15 +436,16 @@ func (m *home) newBlankInstance() (*session.Instance, error) {
 	})
 }
 
-// beginNewInstance puts the app into the inline creation form.
+// beginNewInstance puts the app into the inline creation form. The only thing
+// asked for is the working directory — the title resolves itself later, from
+// whatever the agent names its own conversation (ctrl+r copies it over).
 func (m *home) beginNewInstance(instance *session.Instance) {
 	m.newInstanceFinalizer = m.list.AddInstance(instance)
 	m.list.SetSelectedInstance(m.list.NumInstances() - 1)
 	m.state = stateNew
 	m.menu.SetState(ui.StateNewInstance)
-	m.newField = fieldTitle
 	m.setPathInput(homePrefix)
-	m.list.SetNewInstanceHint(m.newInstanceHint(instance))
+	m.list.SetNewInstanceHint(m.newInstanceHint())
 }
 
 // setPathInput replaces the typed directory and refreshes its completions.
@@ -471,7 +460,6 @@ func (m *home) setPathInput(v string) {
 func (m *home) cancelNewInstance() tea.Cmd {
 	m.list.Kill()
 	m.list.SetNewInstanceHint("")
-	m.newField = fieldTitle
 	m.setPathInput("")
 	m.promptAfterName = false
 	m.state = stateDefault
@@ -485,23 +473,17 @@ func (m *home) cancelNewInstance() tea.Cmd {
 	)
 }
 
-// newInstanceHint is the second line shown under the session being created:
-// which field has focus and what is in it.
-func (m *home) newInstanceHint(instance *session.Instance) string {
-	switch m.newField {
-	case fieldPath:
-		// Kept short on purpose: the list pane is narrow and the path itself is
-		// what the developer needs to read.
-		switch n := len(m.pathCandidates); {
-		case n == 0:
-			return fmt.Sprintf("dir: %s_ [sem correspondência]", m.pathInput)
-		case n == 1:
-			return fmt.Sprintf("dir: %s_ [tab]", m.pathInput)
-		default:
-			return fmt.Sprintf("dir: %s_ [tab %d]", m.pathInput, n)
-		}
+// newInstanceHint is the second line shown under the session being created.
+// Kept short on purpose: the list pane is narrow and the path itself is what
+// the developer needs to read.
+func (m *home) newInstanceHint() string {
+	switch n := len(m.pathCandidates); {
+	case n == 0:
+		return fmt.Sprintf("dir: %s_ [sem correspondência]", m.pathInput)
+	case n == 1:
+		return fmt.Sprintf("dir: %s_ [tab]", m.pathInput)
 	default:
-		return "nome  (enter para confirmar)"
+		return fmt.Sprintf("dir: %s_ [tab %d]", m.pathInput, n)
 	}
 }
 
@@ -522,6 +504,11 @@ func (m *home) handleNewInstanceField(msg tea.KeyMsg, instance *session.Instance
 		}
 		if err := instance.SetPath(m.pathInput); err != nil {
 			return m, m.handleError(err)
+		}
+		// No title was asked for: the directory name stands in until ctrl+r
+		// copies over whatever the agent names its own conversation.
+		if instance.Title == "" {
+			_ = instance.SetTitle(instance.DirName())
 		}
 		return m.startNewInstance(instance)
 	case tea.KeyTab:
@@ -544,14 +531,13 @@ func (m *home) handleNewInstanceField(msg tea.KeyMsg, instance *session.Instance
 	case tea.KeyEsc:
 		return m, m.cancelNewInstance()
 	}
-	m.list.SetNewInstanceHint(m.newInstanceHint(instance))
+	m.list.SetNewInstanceHint(m.newInstanceHint())
 	return m, nil
 }
 
 // startNewInstance finalizes the form: either hand off to the prompt overlay or
 // start the agent right away.
 func (m *home) startNewInstance(instance *session.Instance) (tea.Model, tea.Cmd) {
-	m.newField = fieldTitle
 	m.list.SetNewInstanceHint("")
 
 	// If promptAfterName, show the prompt overlay before starting
@@ -598,49 +584,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, m.cancelNewInstance()
 		}
 
+		// The only thing asked for is the working directory.
 		instance := m.list.GetInstances()[m.list.NumInstances()-1]
-
-		// The directory and mode fields have their own key handling.
-		if m.newField == fieldPath {
-			return m.handleNewInstanceField(msg, instance)
-		}
-
-		switch msg.Type {
-		// Start the instance (enable previews etc) and go back to the main menu state.
-		case tea.KeyEnter:
-			if len(instance.Title) == 0 {
-				return m, m.handleError(fmt.Errorf("title cannot be empty"))
-			}
-			// Move on to the working directory field, anchored at home.
-			m.newField = fieldPath
-			m.setPathInput(homePrefix)
-			m.list.SetNewInstanceHint(m.newInstanceHint(instance))
-			return m, nil
-		case tea.KeyRunes:
-			if runewidth.StringWidth(instance.Title) >= 32 {
-				return m, m.handleError(fmt.Errorf("title cannot be longer than 32 characters"))
-			}
-			if err := instance.SetTitle(instance.Title + string(msg.Runes)); err != nil {
-				return m, m.handleError(err)
-			}
-		case tea.KeyBackspace:
-			runes := []rune(instance.Title)
-			if len(runes) == 0 {
-				return m, nil
-			}
-			if err := instance.SetTitle(string(runes[:len(runes)-1])); err != nil {
-				return m, m.handleError(err)
-			}
-		case tea.KeySpace:
-			if err := instance.SetTitle(instance.Title + " "); err != nil {
-				return m, m.handleError(err)
-			}
-		case tea.KeyEsc:
-			return m, m.cancelNewInstance()
-		default:
-		}
-		m.list.SetNewInstanceHint(m.newInstanceHint(instance))
-		return m, nil
+		return m.handleNewInstanceField(msg, instance)
 	} else if m.state == statePrompt {
 		// Handle cancel via ctrl+c before delegating to the overlay
 		if msg.String() == "ctrl+c" {
@@ -793,22 +739,28 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyMouseSelect:
 		return m, m.toggleMouseSelect()
 	case keys.KeyRenameAgent:
-		// The agent names its own session, and the command that does it is a line
-		// of text like any other — so this is the prompt key with the line already
-		// written. It goes to the agent even when the cell is showing a shell:
-		// /rename means nothing to bash.
+		// One name, both places, typed once: if the agent already named its own
+		// conversation, ctrl+r copies that name into the list; otherwise it asks
+		// the agent to name itself first.
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
-		if !selected.Started() || selected.Paused() || selected.HasExited() {
-			return m, m.handleError(fmt.Errorf(
-				"a sessão '%s' não está rodando — retome antes de renomear", selected.Title))
+		title := selected.AgentTitle()
+		if title == "" {
+			// No name yet: ask the agent to name itself instead of failing.
+			// Next ctrl+r, once it has answered, copies the name over.
+			if err := selected.SendPrompt("/rename"); err != nil {
+				return m, m.handleError(err)
+			}
+			return m, nil
 		}
-		if err := selected.SendPrompt(agentRenameCommand); err != nil {
+		if err := selected.SetTitle(title); err != nil {
 			return m, m.handleError(err)
 		}
-		selected.NeedsAttention = false
+		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+			return m, m.handleError(err)
+		}
 		return m, m.instanceChanged()
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
@@ -910,28 +862,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			"[!] Encerrar a sessão '%s'? Apenas o terminal é fechado; o diretório fica intacto.",
 			selected.Title)
 		return m, m.confirmAction(message, killAction)
-	case keys.KeyPause:
-		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Status == session.Loading {
-			return m, nil
-		}
-
-		if selected.Orphaned() {
-			return m, m.handleError(fmt.Errorf(
-				"session '%s' lost its directory — kill it instead of pausing", selected.Title))
-		}
-		if selected.Paused() {
-			return m, m.handleError(fmt.Errorf("session '%s' is already paused", selected.Title))
-		}
-
-		// Show help screen before pausing
-		return m.showHelpScreen(helpTypeInstancePause{}, func() {
-			if err := selected.Pause(); err != nil {
-				m.handleError(err)
-			}
-			m.tabbedWindow.CleanupTerminalForInstance(selected.ID())
-			m.instanceChanged()
-		})
 	case keys.KeyOpenEditor:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {

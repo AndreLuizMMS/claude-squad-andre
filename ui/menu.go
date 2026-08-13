@@ -193,10 +193,10 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySendPrompt, keys.KeyOpenEditor}
+	// Resume is offered only to a session that actually lost its terminal —
+	// pausing a live one is not something the developer does by hand.
 	if m.instance.Status == session.Paused {
 		actionGroup = append(actionGroup, keys.KeyResume)
-	} else {
-		actionGroup = append(actionGroup, keys.KeyPause)
 	}
 
 	// Navigation group, offered wherever there is a history to read: the terminal

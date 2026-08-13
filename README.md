@@ -33,7 +33,7 @@ Nada de preparar branch, conciliar worktree ou limpar sujeira depois. Aponta a p
 
 - **Sessão = diretório.** O manejo de worktrees, branches, commit, push e checkout foi removido inteiro. O agente edita a pasta que você apontou; o versionamento é seu.
 - **Abre em qualquer lugar** — o coordenador não exige mais estar dentro de um repositório.
-- **Criação em duas etapas**: nome (até 32 caracteres) e diretório de trabalho, com **autocomplete de pastas** por `tab` (percorre as candidatas em ciclo e mostra quantas casam com o que você digitou). O diretório é validado na hora — precisa existir e ser gravável, senão o campo continua aberto com o que você escreveu.
+- **Criação pede só o diretório de trabalho**, com **autocomplete de pastas** por `tab` (percorre as candidatas em ciclo e mostra quantas casam com o que você digitou). O diretório é validado na hora — precisa existir e ser gravável, senão o campo continua aberto com o que você escreveu. O nome sai do próprio diretório e se resolve sozinho depois, com `ctrl-r` copiando o que o agente nomear a conversa dele.
 - **Criar já com prompt** (`N`): depois do formulário, abre uma caixa de prompt com **seletor de perfil de agente**; o agente sobe e recebe o prompt sozinho.
 - **Renomear** sessão já criada (`R`) — só o rótulo muda, terminal e diretório continuam os mesmos.
 - **Reordenar** a lista (`J` / `K`), com a ordem persistida entre execuções.
@@ -58,7 +58,7 @@ Cada sessão carrega um marcador do lado do nome, na lista e no mosaico:
 - **Notificação do sistema** com o nome da sessão (`notify-send`, `wsl-notify-send.exe` ou `osascript`, detectados automaticamente; dá para apontar outro comando). O som sozinho não resolve com o terminal em outra área de trabalho.
 - **Agente que morre vira estado próprio** em vez de continuar com a bolinha verde — e a queda também é anunciada. O estado é lido pelo **nome do comando** da sessão, não por heurística frágil de texto na tela.
 - `espaço` **pula para a próxima sessão que respondeu**. `p` **manda prompt sem entrar** na sessão.
-- `R` renomeia a sessão **aqui**; `ctrl-r` manda `/rename` **para o agente**, que renomeia a conversa dele.
+- `R` renomeia a sessão **aqui**, com o nome digitado; `ctrl-r` **copia o nome que o agente já deu à conversa** — sem digitar nada. O nome vem do transcript da sessão do Claude Code: o `/rename` feito à mão tem prioridade sobre o título que o próprio Claude escolhe. Se a conversa ainda não tem nome, o atalho avisa em vez de renomear.
 - `ctrl-space` **devolve o mouse ao terminal** para selecionar e copiar texto com o mouse, como em qualquer outro programa. Enquanto está ligado a roda não rola nada (o terminal fica com os eventos); `ctrl-space` de novo — ou `ctrl-c`, depois de copiar — devolve o mouse ao aplicativo.
 
 ### 1.3 Mosaico — todas as sessões na tela (`v`)
@@ -76,7 +76,7 @@ Modo de tela novo, que não existe no original. `v` divide a tela igualmente ent
 - `tab` troca o painel **daquela célula** — cada sessão pode estar mostrando um painel diferente.
 - Com mais de um projeto aberto, o mosaico **separa por pasta** igual à lista: cada projeto vira uma **coluna própria, lado a lado**, com sua faixa colorida no topo e suas sessões empilhadas dentro dela. Abrir um segundo projeto estreita o primeiro em vez de empurrá-lo para cima.
 - Quando não cabem todas com tamanho legível, o mosaico **pagina sozinho** ao chegar na borda.
-- `n` no mosaico abre o formulário de nome e diretório no centro da tela.
+- `n` no mosaico abre o formulário de diretório no centro da tela.
 - O modo escolhido (lista ou mosaico) é **lembrado** entre execuções.
 
 ### 1.4 Painéis por sessão
@@ -104,10 +104,10 @@ O painel de **diff** do original foi removido — ocupava uma aba inteira para m
 - **Barra de título** com o consumo da janela de 5h e o selo de auto-yes, visível nos dois modos de tela.
 - **Atalhos com cor forte e feedback visual** ao pressionar; layout que não quebra ao redimensionar a janela.
 
-### 1.6 Entrar, pausar, retomar
+### 1.6 Entrar e retomar
 
 - **Entrar não vira tela cheia**: `↵` dá o teclado à sessão com a lista (ou o mosaico) ainda visível. `ctrl-l` devolve o teclado ao coordenador — `ctrl-d` ou fechar o terminal mata a sessão.
-- `c` **pausa**: fecha o terminal e mantém a sessão. O diretório fica exatamente como está — nada é commitado, nada é removido.
+- **Não existe atalho para pausar.** Pausada é o estado de uma sessão que perdeu o terminal sozinha — processo morto, máquina reiniciada, aplicativo reaberto — e não algo que se faz numa sessão viva.
 - `r` **retoma** (e também sobe agente caído). Com Claude Code, retomar usa `--continue`: **volta na conversa anterior** em vez de começar do zero.
 - **Encerrar uma sessão não reinicia as outras** — e pede confirmação antes.
 - Sessões são gravadas em `~/.claude-squad/state.json`. Ao reabrir, sessão sem terminal volta **pausada** em vez de aparecer como viva.
@@ -173,9 +173,7 @@ Logs e estado ficam em `~/.claude-squad/`.
 ### 3.1 Primeiros cinco minutos
 
 1. **Abra o coordenador** em qualquer pasta: `cs`.
-2. **Crie a sessão** com `n`. O formulário pede duas coisas:
-   - **nome** (até 32 caracteres) → `enter`;
-   - **diretório** de trabalho, com autocomplete por `tab` — a dica embaixo mostra quantas pastas casam com o que você digitou. `enter` cria, `esc` cancela.
+2. **Crie a sessão** com `n`. O formulário pede só o **diretório** de trabalho, com autocomplete por `tab` — a dica embaixo mostra quantas pastas casam com o que você digitou. `enter` cria, `esc` cancela. O nome sai do diretório e se ajusta sozinho depois.
 3. O agente sobe numa sessão tmux em segundo plano e a lista passa a acompanhá-lo. Você **não precisa entrar** para saber o que ele está fazendo: a lista mostra o estado e a prévia ao lado mostra a tela dele.
 4. **Entre na sessão** com `↵` para conversar. Para **voltar à lista**, `ctrl-l` — não use `ctrl-d` nem feche o terminal, isso mata a sessão.
 5. Quer disparar trabalho sem entrar? Selecione a sessão, aperte `p`, digite o prompt, `enter`.
@@ -194,8 +192,9 @@ Fluxo em uma linha: `n` cria → `↵` entra → `ctrl-l` sai → `c` pausa, `r`
 | `n` / `N` | Criar sessão / criar já com prompt |
 | `↵` `o` | Entrar na sessão |
 | `ctrl-l` | Sair da sessão e voltar para a lista |
-| `c` / `r` / `D` | Pausar / retomar (ou subir agente caído) / encerrar |
-| `R` / `ctrl-e` | Renomear / abrir diretório no editor |
+| `r` / `D` | Retomar sessão pausada (ou subir agente caído) / encerrar |
+| `R` / `ctrl-r` | Renomear aqui / copiar o nome que o agente deu à conversa |
+| `ctrl-e` | Abrir diretório no editor |
 | `espaço` / `p` | Pular para a próxima que respondeu / mandar prompt sem entrar |
 | `↑↓` `jk` / `J` `K` | Navegar / reordenar |
 | `tab` / `shift-↑↓` | Trocar entre Claude Code, Cursor CLI e Bash / rolar a aba |
@@ -217,7 +216,7 @@ Fluxo em uma linha: `n` cria → `↵` entra → `ctrl-l` sai → `c` pausa, `r`
 
 | Tecla | Ação |
 |---|---|
-| `enter` | Confirmar o campo (nome → diretório → cria) |
+| `enter` | Confirmar o diretório e criar |
 | `tab` | Completar/percorrer os diretórios candidatos |
 | `esc` / `ctrl-c` | Cancelar |
 

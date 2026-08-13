@@ -10,7 +10,7 @@ import (
 // Drives the real Update loop, including the menu-highlight key re-send.
 func TestKillGoesThroughUpdateLoop(t *testing.T) {
 	h := newTestHome(t)
-	startForm(t, h, "sess")
+	startForm(t, h)
 	h.state = stateDefault
 	h.keySent = false
 

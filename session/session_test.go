@@ -493,6 +493,41 @@ func TestComputeUsageReadsLastAssistantUsageFromNewestTranscript(t *testing.T) {
 	assert.Nil(t, computeUsageFromTranscripts("/no/such/project"))
 }
 
+// TestAgentTitleReadsTheConversationName covers ctrl+r's source of truth: the
+// name the agent's own conversation carries. The case that matters is a session
+// that was renamed by hand and then kept talking — Claude Code writes its
+// automatic title after that, and the hand-picked name still has to win.
+func TestAgentTitleReadsTheConversationName(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	workDir := filepath.Join(home, "work")
+	require.NoError(t, os.MkdirAll(workDir, 0755))
+	projectDir := filepath.Join(home, ".claude", "projects", claudeProjectDirName(workDir))
+	require.NoError(t, os.MkdirAll(projectDir, 0755))
+
+	inst, err := NewInstance(InstanceOptions{Title: "sem-nome", Path: workDir, Program: "bash"})
+	require.NoError(t, err)
+
+	// No transcript yet: nothing to copy.
+	assert.Equal(t, "", inst.AgentTitle())
+
+	transcript := filepath.Join(projectDir, "session.jsonl")
+	lines := strings.Join([]string{
+		`{"type":"ai-title","aiTitle":"Titulo antigo automatico"}`,
+		`{"type":"custom-title","customTitle":"cs-copia-nome-do-agente"}`,
+		`{"type":"assistant","message":{"usage":{"input_tokens":1}}}`,
+		`{"type":"ai-title","aiTitle":"Titulo automatico mais novo"}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(transcript, []byte(lines), 0644))
+
+	assert.Equal(t, "cs-copia-nome-do-agente", inst.AgentTitle())
+
+	// Only the automatic title: it is the name on offer.
+	require.NoError(t, os.WriteFile(transcript, []byte(`{"type":"ai-title","aiTitle":"So o automatico"}`+"\n"), 0644))
+	assert.Equal(t, "So o automatico", inst.AgentTitle())
+}
+
 // TestCapturePanesReadsEachSessionsOwnScreen covers the batched read, which is
 // how a screenful of agents is observed with one tmux process instead of one
 // per session. Two things can go wrong and both are silent: the batch is cut

@@ -17,7 +17,10 @@ const (
 	KeyTab        // Tab is a special keybinding for switching between panes.
 	KeySubmitName // SubmitName is a special keybinding for submitting the name of a new instance.
 
-	KeyPause
+	// KeyResume brings back a session whose terminal is gone — paused because the
+	// process died on its own, or an agent that exited. There is no key to pause a
+	// live session: pausing is what happens to a session that dropped, not
+	// something done to one that is working.
 	KeyResume
 	KeyPrompt // New key for entering a prompt
 	KeyHelp   // Key for showing help screen
@@ -42,7 +45,8 @@ const (
 	// selected and copied with it.
 	KeyMouseSelect
 
-	// KeyRenameAgent types the agent's own rename command into the session.
+	// KeyRenameAgent copies the name the agent gave its own conversation onto
+	// the session.
 	KeyRenameAgent
 )
 
@@ -63,7 +67,6 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"D":          KeyKill,
 	"q":          KeyQuit,
 	"tab":        KeyTab,
-	"c":          KeyPause,
 	"r":          KeyResume,
 	"?":          KeyHelp,
 	"ctrl+e":     KeyOpenEditor,
@@ -120,10 +123,6 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithKeys("N"),
 		key.WithHelp("N", "nova com prompt"),
 	),
-	KeyPause: key.NewBinding(
-		key.WithKeys("c"),
-		key.WithHelp("c", "pausar"),
-	),
 	KeyTab: key.NewBinding(
 		key.WithKeys("tab"),
 		key.WithHelp("tab", "trocar aba"),
@@ -174,7 +173,7 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 
 	KeyRenameAgent: key.NewBinding(
 		key.WithKeys("ctrl+r"),
-		key.WithHelp("ctrl-r", "renomear no agente"),
+		key.WithHelp("ctrl-r", "copiar o nome do agente"),
 	),
 
 	// -- Special keybindings --

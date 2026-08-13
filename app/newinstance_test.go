@@ -52,35 +52,33 @@ func pressEnter(h *home) {
 	press(h, tea.KeyMsg{Type: tea.KeyEnter})
 }
 
-// startForm puts home into the creation form with a titled session, bypassing
-// the menu-highlight round trip that swallows the first key press.
-func startForm(t *testing.T, h *home, title string) *session.Instance {
+// startForm puts home into the creation form, bypassing the menu-highlight
+// round trip that swallows the first key press. The form only asks for the
+// working directory — the title fills itself in from the directory name, and
+// ctrl+r later copies over whatever the agent names its own conversation.
+func startForm(t *testing.T, h *home) *session.Instance {
 	t.Helper()
 	inst, err := h.newBlankInstance()
 	require.NoError(t, err)
 	h.beginNewInstance(inst)
-	typeRunes(t, h, title)
 	return inst
 }
 
-func TestCreationFormWalksTitleThenDirectory(t *testing.T) {
+func TestCreationFormAsksOnlyForDirectory(t *testing.T) {
 	dir := t.TempDir()
 	h := newTestHome(t)
 
-	inst := startForm(t, h, "walk")
-	assert.Equal(t, "walk", inst.Title)
-	assert.Equal(t, fieldTitle, h.newField)
-
-	pressEnter(h)
-	assert.Equal(t, fieldPath, h.newField)
+	inst := startForm(t, h)
 	assert.Equal(t, homePrefix, h.pathInput, "the directory field always starts at home")
 
-	// Confirming the directory is the last step: the session starts right away.
+	// Confirming the directory is the only step: the session starts right away,
+	// titled after the directory.
 	h.setPathInput(dir)
 	pressEnter(h)
 	assert.Equal(t, stateDefault, h.state)
 	assert.Equal(t, session.Loading, inst.Status)
 	assert.Equal(t, dir, inst.Path)
+	assert.Equal(t, inst.DirName(), inst.Title)
 }
 
 // Letters that double as global shortcuts ("c", "o", "r") must be typed, not
@@ -88,8 +86,7 @@ func TestCreationFormWalksTitleThenDirectory(t *testing.T) {
 // "roctz".
 func TestTypingShortcutLettersIntoTheDirectoryKeepsTheirOrder(t *testing.T) {
 	h := newTestHome(t)
-	startForm(t, h, "order")
-	pressEnter(h) // -> directory field
+	startForm(t, h)
 
 	for _, r := range "cortz" {
 		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
@@ -102,14 +99,13 @@ func TestTypingShortcutLettersIntoTheDirectoryKeepsTheirOrder(t *testing.T) {
 
 func TestCreationFormRejectsMissingDirectoryAndKeepsTheTypedValue(t *testing.T) {
 	h := newTestHome(t)
-	startForm(t, h, "bad-dir")
-	pressEnter(h) // -> directory field
+	startForm(t, h)
 
 	missing := filepath.Join(t.TempDir(), "nope")
 	h.setPathInput(missing)
 	pressEnter(h)
 
-	assert.Equal(t, fieldPath, h.newField, "the developer stays on the directory field")
+	assert.Equal(t, stateNew, h.state, "the developer stays on the creation form")
 	assert.Equal(t, missing, h.pathInput, "the typed value is preserved")
 	assert.Contains(t, h.errBox.String(), "does not exist")
 }
@@ -117,8 +113,7 @@ func TestCreationFormRejectsMissingDirectoryAndKeepsTheTypedValue(t *testing.T) 
 func TestCreationFormAcceptsANonVersionedDirectory(t *testing.T) {
 	dir := t.TempDir()
 	h := newTestHome(t)
-	inst := startForm(t, h, "plain-ok")
-	pressEnter(h) // -> directory
+	inst := startForm(t, h)
 	h.setPathInput(dir)
 	pressEnter(h) // confirm
 
@@ -129,8 +124,7 @@ func TestCreationFormAcceptsANonVersionedDirectory(t *testing.T) {
 
 func TestCreationFormExpandsHomeShortcut(t *testing.T) {
 	h := newTestHome(t)
-	inst := startForm(t, h, "tilde")
-	pressEnter(h) // -> directory
+	inst := startForm(t, h)
 	h.setPathInput("~")
 	pressEnter(h)
 
@@ -140,12 +134,10 @@ func TestCreationFormExpandsHomeShortcut(t *testing.T) {
 
 func TestCancelingCreationLeavesNothingBehind(t *testing.T) {
 	h := newTestHome(t)
-	startForm(t, h, "gone")
-	pressEnter(h) // -> directory
+	startForm(t, h)
 
 	press(h, tea.KeyMsg{Type: tea.KeyEsc})
 	assert.Equal(t, stateDefault, h.state)
-	assert.Equal(t, fieldTitle, h.newField)
 	assert.Equal(t, 0, h.list.NumInstances())
 }
 
@@ -157,13 +149,11 @@ func TestDirectoriesFromDifferentReposCoexist(t *testing.T) {
 
 	h := newTestHome(t)
 
-	a := startForm(t, h, "a")
-	pressEnter(h)
+	a := startForm(t, h)
 	h.setPathInput(repoA)
 	pressEnter(h)
 
-	b := startForm(t, h, "b")
-	pressEnter(h)
+	b := startForm(t, h)
 	h.setPathInput(repoB)
 	pressEnter(h)
 

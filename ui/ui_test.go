@@ -34,7 +34,7 @@ func TestMenuOffersNoGitActions(t *testing.T) {
 	assert.NotContains(t, rendered, "push", "versioning is the developer's business")
 	assert.NotContains(t, rendered, "checkout")
 	assert.NotContains(t, rendered, "branch")
-	assert.Contains(t, rendered, "pausar", "closing the terminal is still offered")
+	assert.NotContains(t, rendered, "pausar", "pausing a live session is not offered anymore")
 }
 
 func TestMenuForOrphanedSessionOnlyOffersKill(t *testing.T) {

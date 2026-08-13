@@ -27,8 +27,6 @@ type helpTypeInstanceStart struct {
 
 type helpTypeInstanceAttach struct{}
 
-type helpTypeInstancePause struct{}
-
 func helpStart(instance *session.Instance) helpText {
 	return helpTypeInstanceStart{instance: instance}
 }
@@ -50,7 +48,7 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("espaço")+descStyle.Render("    - Pular para a próxima sessão que respondeu"),
 		keyStyle.Render("p")+descStyle.Render("         - Mandar um prompt sem entrar na sessão"),
 		keyStyle.Render("R")+descStyle.Render("         - Renomear a sessão aqui no Claude Squad"),
-		keyStyle.Render("ctrl-r")+descStyle.Render("    - Mandar '/rename' para o agente renomear a conversa dele"),
+		keyStyle.Render("ctrl-r")+descStyle.Render("    - Copiar para a sessão o nome que o agente deu para a conversa"),
 		keyStyle.Render("ctrl-e")+descStyle.Render("    - Abrir o diretório da sessão no editor"),
 		"",
 		headerStyle.Render("Mosaico (todas as sessões na tela):"),
@@ -65,8 +63,7 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("D")+descStyle.Render("         - Encerrar a sessão em destaque, sem confirmação"),
 		"",
 		headerStyle.Render("Estado da sessão:"),
-		keyStyle.Render("c")+descStyle.Render("         - Pausar: fecha o terminal e mantém a sessão"),
-		keyStyle.Render("r")+descStyle.Render("         - Retomar uma sessão pausada ou subir um agente que caiu"),
+		keyStyle.Render("r")+descStyle.Render("         - Retomar uma sessão que caiu sozinha ou subir um agente que saiu"),
 		"",
 		headerStyle.Render("Marcadores da sessão (lista e mosaico):"),
 		descStyle.Render("⬤ RESPONDEU - o agente devolveu a vez; leia quando puder"),
@@ -99,7 +96,6 @@ func (h helpTypeInstanceStart) toContent() string {
 		keyStyle.Render("↵/o")+descStyle.Render("   - Entrar na sessão para interagir diretamente"),
 		keyStyle.Render("tab")+descStyle.Render("   - Alternar entre a prévia e o terminal da sessão"),
 		keyStyle.Render("D")+descStyle.Render("     - Encerrar (excluir) a sessão selecionada"),
-		keyStyle.Render("c")+descStyle.Render("     - Pausar: fecha o terminal e mantém a sessão"),
 	)
 	return content
 }
@@ -113,23 +109,6 @@ func (h helpTypeInstanceAttach) toContent() string {
 	return content
 }
 
-func (h helpTypeInstancePause) toContent() string {
-	content := lipgloss.JoinVertical(lipgloss.Left,
-		titleStyle.Render("Pausar sessão"),
-		"",
-		"O terminal será fechado. O diretório permanece exatamente como está — nada é commitado e nada é removido.",
-		"",
-		"Retomar reabre o terminal no mesmo diretório, no estado em que ele estiver.",
-		"",
-		"Atenção: o agente perde o contexto da conversa ao ser pausado.",
-		"",
-		headerStyle.Render("Comandos:"),
-		keyStyle.Render("c")+descStyle.Render(" - Pausar a sessão"),
-		keyStyle.Render("r")+descStyle.Render(" - Retomar uma sessão pausada"),
-	)
-	return content
-}
-
 func (h helpTypeGeneral) mask() uint32 {
 	return 1
 }
@@ -139,9 +118,6 @@ func (h helpTypeInstanceStart) mask() uint32 {
 }
 func (h helpTypeInstanceAttach) mask() uint32 {
 	return 1 << 2
-}
-func (h helpTypeInstancePause) mask() uint32 {
-	return 1 << 3
 }
 
 var (

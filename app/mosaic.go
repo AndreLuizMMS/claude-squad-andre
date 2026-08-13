@@ -207,11 +207,6 @@ func (m *home) toggleViewMode() tea.Cmd {
 	return m.instanceChanged()
 }
 
-// agentRenameCommand is what the agent is asked to do when the rename key is
-// pressed. It is the agent's own slash command, sent as a line of input, not
-// anything the coordinator does to its own record of the session — that is R.
-const agentRenameCommand = "/rename"
-
 // toggleMouseSelect hands the mouse to the terminal and back.
 //
 // While the app asks for mouse reporting, every click and drag is delivered to
@@ -279,33 +274,22 @@ func (m *home) newInstanceForm() string {
 	if m.list.NumInstances() == 0 {
 		return ""
 	}
-	instance := m.list.GetInstances()[m.list.NumInstances()-1]
+	dir := m.pathInput + "_"
 
-	// The field being typed into carries the cursor; the other is just shown.
-	name, dir := instance.Title, m.pathInput
-	if m.newField == fieldPath {
-		dir += "_"
-	} else {
-		name += "_"
-	}
-
-	hint := "enter confirma · esc cancela"
-	if m.newField == fieldPath {
-		switch n := len(m.pathCandidates); {
-		case n == 0:
-			hint = "sem diretório com esse nome · esc cancela"
-		case n == 1:
-			hint = "tab completa · enter cria · esc cancela"
-		default:
-			hint = fmt.Sprintf("tab percorre %d diretórios · enter cria · esc cancela", n)
-		}
+	var hint string
+	switch n := len(m.pathCandidates); {
+	case n == 0:
+		hint = "sem diretório com esse nome · esc cancela"
+	case n == 1:
+		hint = "tab completa · enter cria · esc cancela"
+	default:
+		hint = fmt.Sprintf("tab percorre %d diretórios · enter cria · esc cancela", n)
 	}
 
 	body := lipgloss.JoinVertical(
 		lipgloss.Left,
 		mosaicFormTitleStyle.Render("Nova sessão"),
 		"",
-		mosaicFormLabelStyle.Render("nome       ")+name,
 		mosaicFormLabelStyle.Render("diretório  ")+dir,
 		"",
 		mosaicFormHintStyle.Render(hint),

@@ -54,7 +54,7 @@ func TestIsMosaicKey(t *testing.T) {
 
 	kept := []keys.KeyName{
 		keys.KeyNew, keys.KeyKill, keys.KeyRename, keys.KeyUp, keys.KeyDown,
-		keys.KeyEnter, keys.KeyPause, keys.KeyResume, keys.KeyViewMode, keys.KeyQuit,
+		keys.KeyEnter, keys.KeyResume, keys.KeyViewMode, keys.KeyQuit,
 	}
 	for _, k := range kept {
 		if !isMosaicKey(k) {
