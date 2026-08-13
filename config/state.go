@@ -29,6 +29,10 @@ type AppState interface {
 	GetHelpScreensSeen() uint32
 	// SetHelpScreensSeen updates the bitmask of seen help screens
 	SetHelpScreensSeen(seen uint32) error
+	// GetViewMosaic reports whether the coordinator was last left in the mosaic
+	GetViewMosaic() bool
+	// SetViewMosaic remembers which view mode was in use
+	SetViewMosaic(mosaic bool) error
 }
 
 // StateManager combines instance storage and app state management
@@ -43,6 +47,9 @@ type State struct {
 	HelpScreensSeen uint32 `json:"help_screens_seen"`
 	// Instances stores the serialized instance data as raw JSON
 	InstancesData json.RawMessage `json:"instances"`
+	// ViewMosaic remembers whether the last session ended in the mosaic view.
+	// Reopening in the view you were working in is the whole point.
+	ViewMosaic bool `json:"view_mosaic"`
 }
 
 // DefaultState returns the default state
@@ -136,6 +143,17 @@ func (s *State) GetHelpScreensSeen() uint32 {
 // SetHelpScreensSeen updates the bitmask of seen help screens
 func (s *State) SetHelpScreensSeen(seen uint32) error {
 	s.HelpScreensSeen = seen
+	return SaveState(s)
+}
+
+// GetViewMosaic reports whether the coordinator was last left in the mosaic view
+func (s *State) GetViewMosaic() bool {
+	return s.ViewMosaic
+}
+
+// SetViewMosaic remembers which view mode was in use
+func (s *State) SetViewMosaic(mosaic bool) error {
+	s.ViewMosaic = mosaic
 	return SaveState(s)
 }
 

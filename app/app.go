@@ -118,6 +118,15 @@ type home struct {
 	// Attaching hands the agent the entire window, so we need them.
 	winWidth, winHeight int
 
+	// viewMode is which screen is up: the list with one session beside it, or
+	// the mosaic with all of them.
+	viewMode viewMode
+	// previewTicks counts redraw rounds. The mosaic uses it to re-read the
+	// cells nobody is typing into on a slower beat.
+	previewTicks int
+	// mosaicCount is how many sessions the mosaic cells were last sized for.
+	mosaicCount int
+
 	// keySent is used to manage underlining menu items
 	keySent bool
 
@@ -129,6 +138,8 @@ type home struct {
 	menu *ui.Menu
 	// tabbedWindow displays the tabbed window with preview and diff panes
 	tabbedWindow *ui.TabbedWindow
+	// mosaic displays every session at once, the screen split evenly
+	mosaic *ui.Mosaic
 	// errBox displays error messages
 	errBox *ui.ErrBox
 	// global spinner instance. we plumb this down to where it's needed
@@ -155,11 +166,16 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		os.Exit(1)
 	}
 
+	// The shell panes are shared by both views: a Bash opened in a mosaic cell is
+	// the same Bash the list view's tab shows, not a second one.
+	terminalPane, agentPane := ui.NewTerminalPane(), ui.NewAgentPane()
+
 	h := &home{
 		ctx:          ctx,
 		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewTerminalPane(), ui.NewAgentPane()),
+		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), terminalPane, agentPane),
+		mosaic:       ui.NewMosaic(terminalPane, agentPane),
 		errBox:       ui.NewErrBox(),
 		storage:      storage,
 		appConfig:    appConfig,
@@ -171,6 +187,10 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		armed:        make(map[string]bool),
 	}
 	h.list = ui.NewList(&h.spinner, autoYes)
+	if appState.GetViewMosaic() {
+		h.viewMode = viewMosaic
+	}
+	h.menu.SetInMosaic(h.viewMode == viewMosaic)
 
 	// Load saved instances. A record we cannot read must not stop the coordinator
 	// from opening — whatever could be restored is listed, the stored file is kept
@@ -210,6 +230,15 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
 	m.list.SetSize(listWidth, contentHeight)
+	// The mosaic gets the whole screen: there is no list beside it, the cells
+	// carry the session names themselves, and the menu is squeezed to the single
+	// line it actually prints instead of the tenth of the screen the list view
+	// reserves for it. Four rows go to the title bar, the footer, the menu and
+	// the error box.
+	m.mosaic.SetSize(msg.Width, msg.Height-4)
+	if m.viewMode == viewMosaic {
+		menuHeight = 1
+	}
 
 	if m.textInputOverlay != nil {
 		m.textInputOverlay.SetSize(int(float32(msg.Width)*0.6), int(float32(msg.Height)*0.4))
@@ -218,10 +247,7 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		m.textOverlay.SetWidth(int(float32(msg.Width) * 0.6))
 	}
 
-	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
-	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
-		log.ErrorLog.Print(err)
-	}
+	m.syncSessionSizes()
 	m.menu.SetSize(msg.Width, menuHeight)
 }
 
@@ -234,7 +260,7 @@ func (m *home) Init() tea.Cmd {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
 		},
-		tickUpdateMetadataCmd(m.snapshotActiveInstances(), true),
+		tickUpdateMetadataCmd(m.snapshotActiveInstances(), 0),
 	}
 	if m.loadErr != nil {
 		err := m.loadErr
@@ -249,6 +275,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case hideErrMsg:
 		m.errBox.Clear()
 	case previewTickMsg:
+		m.previewTicks++
 		cmd := m.instanceChanged()
 		return m, tea.Batch(
 			cmd,
@@ -263,7 +290,7 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case metadataUpdateDoneMsg:
 		m.applyMetadataResults(msg.results)
 		m.metaTicks++
-		next := tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.forceDiffRead())
+		next := tickUpdateMetadataCmd(m.snapshotActiveInstances(), m.metaTicks)
 		if len(m.notices) > 0 {
 			cmds := []tea.Cmd{next}
 			if !m.appConfig.DisableBell {
@@ -360,8 +387,16 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
+	// Text-entry states must never take the re-send round trip: it hands the key
+	// to a tea.Cmd goroutine, so letters that happen to be global shortcuts
+	// ("c", "o", "r", ...) arrive out of order and the typed word scrambles.
 	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm ||
-		m.state == stateRename {
+		m.state == stateRename || m.state == stateNew {
+		return nil, false
+	}
+	// A focused mosaic cell is the developer typing to an agent. Flashing the
+	// coordinator's menu because they happened to type an "n" is noise.
+	if m.viewMode == viewMosaic && m.mosaic.Focused() {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -377,11 +412,6 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		return nil, false
 	}
 
-	// Skip the menu highlighting if the key is not in the map or we are using the shift up and down keys.
-	// TODO: cleanup: when you press enter on stateNew, we use keys.KeySubmitName. We should unify the keymap.
-	if name == keys.KeyEnter && m.state == stateNew {
-		name = keys.KeySubmitName
-	}
 	m.keySent = true
 	return tea.Batch(
 		func() tea.Msg { return msg },
@@ -687,6 +717,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	// The mosaic gets the press before anything else: while a cell holds the
+	// keyboard, even q and ctrl+c belong to the agent, not to the coordinator.
+	if m.viewMode == viewMosaic {
+		if cmd, handled := m.handleMosaicKey(msg); handled {
+			return m, cmd
+		}
+	}
+
 	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
 	// Check if Escape key was pressed and we're not in the diff tab (meaning we're in preview tab)
 	// Always check for escape key first to ensure it doesn't get intercepted elsewhere
@@ -718,7 +756,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	// Tabs, per-pane scrolling and reordering have no meaning in the mosaic.
+	if m.viewMode == viewMosaic && !isMosaicKey(name) {
+		return m, nil
+	}
+
 	switch name {
+	case keys.KeyViewMode:
+		return m, m.toggleViewMode()
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyPrompt:
@@ -795,6 +840,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		killAction := func() tea.Msg {
 			// Clean up terminal session for this instance
 			m.tabbedWindow.CleanupTerminalForInstance(selected.ID())
+			m.mosaic.Forget(selected.ID())
 
 			// Delete from storage first
 			if err := m.storage.DeleteInstance(selected.ID()); err != nil {
@@ -804,6 +850,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			// Then kill the instance
 			m.list.Kill()
 			return instanceChangedMsg{}
+		}
+
+		// In the mosaic the session is on screen while it is killed, so the
+		// developer can see exactly which one goes — the confirmation would only
+		// ask about something they are already looking at.
+		if m.viewMode == viewMosaic {
+			return m, killAction
 		}
 
 		// Show confirmation modal
@@ -912,8 +965,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if !selected.TmuxAlive() {
 			return m, nil
 		}
-		// Terminal tab: attach to terminal session
-		if m.tabbedWindow.IsInTerminalTab() {
+		// Terminal tab: attach to terminal session. The mosaic has no tabs, so
+		// whichever tab was left active in the list view must not decide what
+		// opens from a cell — it is always the agent.
+		if m.viewMode == viewList && m.tabbedWindow.IsInTerminalTab() {
 			return m.showHelpScreen(helpTypeInstanceAttach{}, func() {
 				ch, err := m.tabbedWindow.AttachTerminal()
 				if err != nil {
@@ -922,7 +977,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				}
 				<-ch
 				m.state = stateDefault
-				m.restorePreviewSize()
+				m.syncSessionSizes()
 			})
 		}
 		// Opening the session is the developer seeing the answer.
@@ -949,7 +1004,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			// Attaching resized the agent's terminal to the whole window. Put it
 			// back to the preview shape right here, rather than waiting for the
 			// next resize event to notice.
-			m.restorePreviewSize()
+			m.syncSessionSizes()
 			m.instanceChanged()
 		})
 	default:
@@ -1160,9 +1215,22 @@ func (m *home) instanceChanged() tea.Cmd {
 	// selected may be nil
 	selected := m.list.GetSelectedInstance()
 
-	m.tabbedWindow.SetInstance(selected)
 	// Update menu with current instance
 	m.menu.SetInstance(selected)
+
+	// The mosaic reads every visible session itself, and has no tabs or preview
+	// pane to keep in sync.
+	if m.viewMode == viewMosaic {
+		if m.list.NumInstances() != m.mosaicCount {
+			// Cells got bigger or smaller because a session came or went, so
+			// the terminals have to be reshaped before the next capture.
+			m.syncSessionSizes()
+		}
+		m.mosaic.UpdateContent(m.list.GetInstances(), m.list.SelectedIdx(), m.previewTicks)
+		return nil
+	}
+
+	m.tabbedWindow.SetInstance(selected)
 
 	// If there's no selected instance, we don't need to update the preview.
 	if err := m.tabbedWindow.UpdatePreview(selected); err != nil {
@@ -1213,8 +1281,8 @@ type instanceMetaResult struct {
 	busy bool
 	// hasBusyMarker is true when this agent reports its working state at all.
 	hasBusyMarker bool
-	diffStats  *git.DiffStats
-	usageStats *session.UsageStats
+	diffStats     *git.DiffStats
+	usageStats    *session.UsageStats
 	// dirMissing is true when the session's working directory no longer exists.
 	dirMissing bool
 	// dead is true when the agent's terminal is gone: the process ended without
@@ -1261,13 +1329,18 @@ func (m *home) snapshotActiveInstances() []*session.Instance {
 // over the whole working directory twice a second per session, which costs
 // real CPU on a large repository and tells us nothing new while the agent is
 // idle.
-func tickUpdateMetadataCmd(active []*session.Instance, forceDiff bool) tea.Cmd {
+func tickUpdateMetadataCmd(active []*session.Instance, tick int) tea.Cmd {
 	return func() tea.Msg {
 		time.Sleep(500 * time.Millisecond)
 
 		if len(active) == 0 {
 			return metadataUpdateDoneMsg{}
 		}
+
+		// Every screen in one tmux process. Reading them one at a time was what
+		// made a screenful of agents crawl: the spawn dominates the round, and
+		// the round runs twice a second.
+		screens := session.CapturePanes(active)
 
 		results := make([]instanceMetaResult, len(active))
 		var wg sync.WaitGroup
@@ -1282,16 +1355,30 @@ func tickUpdateMetadataCmd(active []*session.Instance, forceDiff bool) tea.Cmd {
 				if r.dirMissing = !instance.WorkingDirExists(); r.dirMissing {
 					return
 				}
-				// The agent is the only process in its terminal, so the terminal
-				// disappearing means the agent ended. Without this check the
-				// session keeps its last status — a green "ready" dot for an
-				// agent that is not there anymore.
-				if r.dead = !instance.TmuxAlive(); r.dead {
-					return
+				// Reading the pane is also the liveness check: the agent is the
+				// only process in its terminal, so a capture that fails is a
+				// terminal that is gone. Asking tmux whether the session exists
+				// before every read would double the number of tmux processes
+				// this loop starts, for an answer the read already carries.
+				if content, ok := screens[instance.ID()]; ok {
+					r.updated, r.hasPrompt, r.busy = instance.ApplyCapture(content)
+				} else {
+					// The batch stops at the first session it cannot read, so a
+					// missing screen may just mean this one came after the one
+					// that died. Read it on its own before believing anything.
+					var err error
+					r.updated, r.hasPrompt, r.busy, err = instance.HasUpdated()
+					if err != nil {
+						// Confirm before declaring the agent dead: a one-off capture
+						// failure must not turn a working session into an exited one.
+						// Without this check the session keeps its last status — a
+						// green "ready" dot for an agent that is not there anymore.
+						r.dead = !instance.TmuxAlive()
+						return
+					}
 				}
-				r.updated, r.hasPrompt, r.busy = instance.HasUpdated()
 				r.hasBusyMarker = instance.HasBusyMarker()
-				if !r.updated && !forceDiff {
+				if !heavyReadDue(tick, i) {
 					return
 				}
 				r.diffRead = true
@@ -1305,16 +1392,22 @@ func tickUpdateMetadataCmd(active []*session.Instance, forceDiff bool) tea.Cmd {
 	}
 }
 
-// diffEveryNTicks is how many observation rounds pass between diff reads of an
-// idle session. At 500ms a round, an untouched session is re-read every 2s.
+// diffEveryNTicks is how many observation rounds pass between diff reads of a
+// session. At 500ms a round, every session is re-read every 2s.
 const diffEveryNTicks = 4
 
-// forceDiffRead reports whether this round should refresh the line counters of
-// every session, including the ones whose terminal did not change. Edits made
-// outside the agent are invisible to the terminal watcher, so the counters
-// would otherwise go stale.
-func (m *home) forceDiffRead() bool {
-	return m.metaTicks%diffEveryNTicks == 0
+// heavyReadDue reports whether this session should refresh its line counters
+// and context usage this round. Reading the diff is a git process over the
+// whole working directory and the usage is a file read, so they run on their
+// own slow beat rather than on every observation.
+//
+// The beat is offset per session so a screenful of agents spreads its git
+// processes across the rounds instead of starting all of them at once every
+// two seconds. Edits made outside the agent are picked up by the same beat:
+// the terminal watcher cannot see them, so the counters are refreshed on a
+// timer rather than on terminal activity.
+func heavyReadDue(tick, idx int) bool {
+	return (tick+idx)%diffEveryNTicks == 0
 }
 
 // handleError handles all errors which get bubbled up to the app. sets the error message. We return a callback tea.Cmd that returns a hideErrMsg message
@@ -1382,15 +1475,24 @@ func (m *home) View() string {
 	// The list and the window already open with a blank line of their own
 	// (title spacing, tab row) — no extra top padding stacked on here, or the
 	// window starts scrolled down for nothing.
-	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, m.list.String(), m.tabbedWindow.String())
+	content := lipgloss.JoinHorizontal(lipgloss.Top, m.list.String(), m.tabbedWindow.String())
+	menu := m.menu.String()
+	if m.viewMode == viewMosaic {
+		content = m.mosaicView()
+		// While a cell holds the keyboard the menu keys are going to the agent,
+		// not to the coordinator: the mosaic says so itself instead.
+		if m.mosaic.Focused() {
+			menu = ""
+		}
+	}
 
 	// Left-aligned: the panes are already sized to add up to the full window
 	// width, so centering the stack only shifts it around unpredictably as the
 	// terminal is resized.
 	mainView := lipgloss.JoinVertical(
 		lipgloss.Left,
-		listAndPreview,
-		m.menu.String(),
+		content,
+		menu,
 		m.errBox.String(),
 	)
 
@@ -1409,6 +1511,9 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("confirmation overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.confirmationOverlay.Render(), mainView, true, true)
+	} else if m.state == stateNew && m.viewMode == viewMosaic {
+		// The inline form lives in the list, which the mosaic does not draw.
+		return overlay.PlaceOverlay(0, 0, m.newInstanceForm(), mainView, true, true)
 	}
 
 	return mainView

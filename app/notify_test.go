@@ -143,19 +143,34 @@ func TestAnOrphanedSessionNeverRings(t *testing.T) {
 	assert.Equal(t, session.Orphaned, inst.Status)
 }
 
-// TestIdleSessionsAreNotDiffedEveryRound guards the throttle: reading the diff
-// twice a second per session costs real CPU on a large repository and says
+// TestDiffIsReadOnScheduleAndOnSelectionChange guards the throttle: reading the
+// diff twice a second per session costs real CPU on a large repository and says
 // nothing new while the agent sits still.
 func TestDiffIsReadOnScheduleAndOnSelectionChange(t *testing.T) {
-	h := newTestHome(t)
-
-	assert.True(t, h.forceDiffRead(), "the first round reads everything")
-	for i := 1; i < diffEveryNTicks; i++ {
-		h.metaTicks = i
-		assert.False(t, h.forceDiffRead(), "idle round %d skips the diff", i)
+	assert.True(t, heavyReadDue(0, 0), "the first round reads the first session")
+	for tick := 1; tick < diffEveryNTicks; tick++ {
+		assert.False(t, heavyReadDue(tick, 0), "idle round %d skips the diff", tick)
 	}
-	h.metaTicks = diffEveryNTicks
-	assert.True(t, h.forceDiffRead(), "the periodic refresh still happens")
+	assert.True(t, heavyReadDue(diffEveryNTicks, 0), "the periodic refresh still happens")
+}
+
+// TestHeavyReadsAreSpreadAcrossRounds: a screenful of agents must not start all
+// of its git processes in the same round. Each session gets the same 2s beat,
+// offset from its neighbours.
+func TestHeavyReadsAreSpreadAcrossRounds(t *testing.T) {
+	const sessions = 12
+	perRound := make([]int, diffEveryNTicks)
+	for tick := 0; tick < diffEveryNTicks; tick++ {
+		for idx := 0; idx < sessions; idx++ {
+			if heavyReadDue(tick, idx) {
+				perRound[tick]++
+			}
+		}
+	}
+	for tick, n := range perRound {
+		assert.Equal(t, sessions/diffEveryNTicks, n,
+			"round %d should carry its share of the sessions, not all of them", tick)
+	}
 }
 
 // TestSkippedDiffKeepsThePreviousNumbers: a round that did not read the diff

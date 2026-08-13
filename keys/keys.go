@@ -35,6 +35,8 @@ const (
 
 	KeyNextAttention // Jump to the next session that handed the turn back
 	KeySendPrompt    // Send a prompt to the selected session without attaching
+
+	KeyViewMode // Switch between the list view and the mosaic of every session
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -57,10 +59,11 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"c":          KeyPause,
 	"r":          KeyResume,
 	"?":          KeyHelp,
-	"e":          KeyOpenEditor,
+	"ctrl+e":     KeyOpenEditor,
 	"R":          KeyRename,
 	" ":          KeyNextAttention,
 	"p":          KeySendPrompt,
+	"v":          KeyViewMode,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -128,8 +131,8 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	),
 
 	KeyOpenEditor: key.NewBinding(
-		key.WithKeys("e"),
-		key.WithHelp("e", "abrir no editor"),
+		key.WithKeys("ctrl+e"),
+		key.WithHelp("ctrl-e", "abrir no editor"),
 	),
 
 	KeyRename: key.NewBinding(
@@ -145,6 +148,11 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeySendPrompt: key.NewBinding(
 		key.WithKeys("p"),
 		key.WithHelp("p", "mandar prompt"),
+	),
+
+	KeyViewMode: key.NewBinding(
+		key.WithKeys("v"),
+		key.WithHelp("v", "mosaico"),
 	),
 
 	// -- Special keybindings --

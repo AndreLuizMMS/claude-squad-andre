@@ -4,6 +4,8 @@ import (
 	"claude-squad/keys"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
+
 	"claude-squad/session"
 
 	"github.com/charmbracelet/lipgloss"
@@ -48,6 +50,11 @@ type Menu struct {
 	state         MenuState
 	instance      *session.Instance
 	activeTab     int
+
+	// inMosaic changes the wording of the keys that mean something else there:
+	// v goes back to the list instead of opening the mosaic, and tab switches
+	// the panel of one cell instead of the tab of the pane.
+	inMosaic bool
 
 	// keyDown is the key which is pressed. The default is -1.
 	keyDown keys.KeyName
@@ -100,6 +107,28 @@ func (m *Menu) SetActiveTab(tab int) {
 	m.updateOptions()
 }
 
+// SetInMosaic tells the menu which of the two views it is under.
+func (m *Menu) SetInMosaic(inMosaic bool) {
+	m.inMosaic = inMosaic
+}
+
+// mosaicDescs are the keys the mosaic reads differently from the list.
+var mosaicDescs = map[keys.KeyName]string{
+	keys.KeyViewMode: "voltar à lista",
+	keys.KeyTab:      "trocar painel",
+	keys.KeyEnter:    "digitar na célula",
+}
+
+// describe is the help text of a key in the view the menu is under.
+func (m *Menu) describe(name keys.KeyName, binding key.Binding) string {
+	if m.inMosaic {
+		if desc, ok := mosaicDescs[name]; ok {
+			return desc
+		}
+	}
+	return binding.Help().Desc
+}
+
 // updateOptions updates the menu options based on current state and instance
 func (m *Menu) updateOptions() {
 	switch m.state {
@@ -132,7 +161,7 @@ func (m *Menu) addInstanceOptions() {
 
 	// A session that lost its directory can only be killed.
 	if m.instance.Orphaned() {
-		m.options = append(options, keys.KeyTab, keys.KeyHelp, keys.KeyQuit)
+		m.options = append(options, keys.KeyViewMode, keys.KeyTab, keys.KeyHelp, keys.KeyQuit)
 		return
 	}
 
@@ -141,8 +170,8 @@ func (m *Menu) addInstanceOptions() {
 	// A session whose agent exited has no terminal to talk to: all it can do is
 	// come back up, or be killed.
 	if m.instance.HasExited() {
-		m.options = append(options, keys.KeyResume, keys.KeyOpenEditor, keys.KeyTab,
-			keys.KeyHelp, keys.KeyQuit)
+		m.options = append(options, keys.KeyResume, keys.KeyOpenEditor, keys.KeyViewMode,
+			keys.KeyTab, keys.KeyHelp, keys.KeyQuit)
 		return
 	}
 
@@ -159,7 +188,7 @@ func (m *Menu) addInstanceOptions() {
 	}
 
 	// System group
-	systemGroup := []keys.KeyName{keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
+	systemGroup := []keys.KeyName{keys.KeyViewMode, keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
 
 	// Combine all groups
 	options = append(options, actionGroup...)
@@ -213,14 +242,15 @@ func (m *Menu) String() string {
 			inActionGroup = i >= groups[1].start && i < groups[1].end
 		}
 
+		desc := m.describe(k, binding)
 		if inActionGroup {
 			s.WriteString(localActionStyle.Render(binding.Help().Key))
 			s.WriteString(" ")
-			s.WriteString(localActionStyle.Render(binding.Help().Desc))
+			s.WriteString(localActionStyle.Render(desc))
 		} else {
 			s.WriteString(localKeyStyle.Render(binding.Help().Key))
 			s.WriteString(" ")
-			s.WriteString(localDescStyle.Render(binding.Help().Desc))
+			s.WriteString(localDescStyle.Render(desc))
 		}
 
 		// Add appropriate separator

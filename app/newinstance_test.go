@@ -83,6 +83,23 @@ func TestCreationFormWalksTitleThenDirectory(t *testing.T) {
 	assert.Equal(t, dir, inst.Path)
 }
 
+// Letters that double as global shortcuts ("c", "o", "r") must be typed, not
+// re-sent through a tea.Cmd: the round trip reorders them and "cortz" lands as
+// "roctz".
+func TestTypingShortcutLettersIntoTheDirectoryKeepsTheirOrder(t *testing.T) {
+	h := newTestHome(t)
+	startForm(t, h, "order")
+	pressEnter(h) // -> directory field
+
+	for _, r := range "cortz" {
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+		_, returnEarly := h.handleMenuHighlighting(msg)
+		require.False(t, returnEarly, "typing %q must not take the menu-highlight round trip", r)
+		h.handleKeyPress(msg)
+	}
+	assert.Equal(t, homePrefix+"cortz", h.pathInput)
+}
+
 func TestCreationFormRejectsMissingDirectoryAndKeepsTheTypedValue(t *testing.T) {
 	h := newTestHome(t)
 	startForm(t, h, "bad-dir")
@@ -183,6 +200,7 @@ func TestDismissedHelpStillRedraws(t *testing.T) {
 type fakeAppState struct {
 	seen      uint32
 	instances []byte
+	mosaic    bool
 }
 
 func (f *fakeAppState) GetHelpScreensSeen() uint32 { return f.seen }
@@ -196,3 +214,8 @@ func (f *fakeAppState) SaveInstances(d json.RawMessage) error {
 	return nil
 }
 func (f *fakeAppState) DeleteAllInstances() error { f.instances = nil; return nil }
+func (f *fakeAppState) GetViewMosaic() bool       { return f.mosaic }
+func (f *fakeAppState) SetViewMosaic(v bool) error {
+	f.mosaic = v
+	return nil
+}

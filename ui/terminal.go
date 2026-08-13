@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/lipgloss"
@@ -24,7 +25,19 @@ var terminalFooterStyle = lipgloss.NewStyle().
 type terminalSession struct {
 	tmuxSession  *tmux.TmuxSession
 	worktreePath string
+	// width/height are the shape the tmux session was last set to. The list view
+	// and the mosaic want different shapes for the same shell, so the size is
+	// tracked per session instead of assumed from the pane.
+	width, height int
+	// verifiedAt is when tmux last confirmed this shell is still there.
+	verifiedAt time.Time
 }
+
+// verifyEvery is how long a cached shell is trusted without asking tmux again.
+// The question costs a process, the pane is read ten times a second, and a
+// shell that dies is caught anyway: its next read fails and the entry is
+// dropped.
+const verifyEvery = 5 * time.Second
 
 // TerminalPane manages tmux sessions in the worktree directory of selected instances.
 // Sessions are cached per instance so switching between instances preserves terminal state.
@@ -72,10 +85,81 @@ func (t *TerminalPane) SetSize(width, height int) {
 	t.viewport.Width = width
 	t.viewport.Height = height
 	if s, ok := t.sessions[t.currentTitle]; ok && s.tmuxSession != nil {
-		if err := s.tmuxSession.SetDetachedSize(width, height); err != nil {
-			log.InfoLog.Printf("terminal pane: failed to set detached size: %v", err)
+		t.resizeLocked(s, width, height)
+	}
+}
+
+// resizeLocked reshapes a cached tmux session, skipping the call when it is
+// already the right shape. Caller must hold t.mu.
+func (t *TerminalPane) resizeLocked(s *terminalSession, width, height int) {
+	if s == nil || s.tmuxSession == nil || width <= 0 || height <= 0 {
+		return
+	}
+	if s.width == width && s.height == height {
+		return
+	}
+	if err := s.tmuxSession.SetDetachedSize(width, height); err != nil {
+		log.InfoLog.Printf("terminal pane: failed to set detached size: %v", err)
+		return
+	}
+	s.width, s.height = width, height
+}
+
+// CaptureForInstance reads one instance's pane at an arbitrary size, without
+// changing which instance the pane is showing in the list view. The mosaic needs
+// every visible session captured, not only the selected one.
+func (t *TerminalPane) CaptureForInstance(instance *session.Instance, width, height int) (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if instance == nil || !instance.Started() || instance.Status == session.Paused {
+		return "", nil
+	}
+	if t.program != "" {
+		if _, err := exec.LookPath(t.program); err != nil {
+			return fmt.Sprintf("Comando '%s' não encontrado no PATH.", t.program), nil
 		}
 	}
+
+	// ensureSessionLocked points the pane at whatever it just started; the list
+	// view is still showing its own instance and must not be moved.
+	prevTitle, prevFallback, prevText := t.currentTitle, t.fallback, t.fallbackText
+	defer func() { t.currentTitle, t.fallback, t.fallbackText = prevTitle, prevFallback, prevText }()
+
+	if err := t.ensureSessionLocked(instance); err != nil {
+		return "", err
+	}
+	// Same as UpdateContent: ensureSessionLocked already checked, and the mosaic
+	// runs this for every cell on screen.
+	s, ok := t.sessions[instance.ID()]
+	if !ok || s.tmuxSession == nil {
+		return "", nil
+	}
+	t.resizeLocked(s, width, height)
+	content, err := s.tmuxSession.CapturePaneContent()
+	if err != nil {
+		// A read that fails is how a dead shell announces itself now that the
+		// existence check runs on a timer. Drop it so the next call rebuilds.
+		delete(t.sessions, instance.ID())
+		return "", err
+	}
+	return content, nil
+}
+
+// SendKeysToInstance types into one instance's pane. In the mosaic the cell that
+// holds the keyboard is not necessarily the one the list view is showing.
+func (t *TerminalPane) SendKeysToInstance(instance *session.Instance, keys string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if instance == nil {
+		return fmt.Errorf("nenhuma sessão selecionada")
+	}
+	s, ok := t.sessions[instance.ID()]
+	if !ok || s.tmuxSession == nil {
+		return fmt.Errorf("o painel da sessão '%s' ainda não subiu", instance.Title)
+	}
+	return s.tmuxSession.SendKeys(keys)
 }
 
 // setFallbackState sets the terminal pane to display a fallback message.
@@ -119,14 +203,22 @@ func (t *TerminalPane) UpdateContent(instance *session.Instance) error {
 		return nil
 	}
 
+	// ensureSessionLocked just proved the session is alive, so it is not asked
+	// again here: this runs ten times a second and each ask is a tmux process.
 	s, ok := t.sessions[t.currentTitle]
-	if !ok || s.tmuxSession == nil || !s.tmuxSession.DoesSessionExist() {
+	if !ok || s.tmuxSession == nil {
 		t.setFallbackState("Sessão de terminal indisponível.")
 		return nil
 	}
 
+	// The mosaic reshapes these same sessions to cell size, so the pane claims
+	// its own shape back before reading.
+	t.resizeLocked(s, t.width, t.height)
+
 	content, err := s.tmuxSession.CapturePaneContent()
 	if err != nil {
+		// See CaptureForInstance: the read is the liveness check.
+		delete(t.sessions, t.currentTitle)
 		return fmt.Errorf("terminal pane: failed to capture content: %w", err)
 	}
 
@@ -158,8 +250,14 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 
 	// Check if we already have a cached session for this instance
 	if s, ok := t.sessions[instance.ID()]; ok {
-		if s.tmuxSession != nil && s.tmuxSession.DoesSessionExist() {
-			return nil
+		if s.tmuxSession != nil {
+			if time.Since(s.verifiedAt) < verifyEvery {
+				return nil
+			}
+			if s.tmuxSession.DoesSessionExist() {
+				s.verifiedAt = time.Now()
+				return nil
+			}
 		}
 		// Session died, remove stale entry and recreate below
 		delete(t.sessions, instance.ID())
@@ -197,17 +295,13 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 		}
 	}
 
-	t.sessions[instance.ID()] = &terminalSession{
+	s := &terminalSession{
 		tmuxSession:  ts,
 		worktreePath: worktreePath,
+		verifiedAt:   time.Now(),
 	}
-
-	// Set the size
-	if t.width > 0 && t.height > 0 {
-		if err := ts.SetDetachedSize(t.width, t.height); err != nil {
-			log.InfoLog.Printf("terminal pane: failed to set size: %v", err)
-		}
-	}
+	t.sessions[instance.ID()] = s
+	t.resizeLocked(s, t.width, t.height)
 
 	return nil
 }

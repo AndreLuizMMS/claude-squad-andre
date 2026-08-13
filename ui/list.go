@@ -61,23 +61,33 @@ var approvalTitleStyle = lipgloss.NewStyle().
 	Bold(true).
 	Foreground(lipgloss.Color("#ff6b81"))
 
+// The colors of a session line. They live apart from the styles because the
+// mosaic paints the same two lines inside a cell, without the list's padding:
+// one palette, two views, a session that reads the same in either.
+var (
+	itemTitleColor    = lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#dddddd"}
+	itemDescColor     = lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"}
+	itemSelectedBg    = lipgloss.Color("#dde4f0")
+	itemSelectedColor = lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#1a1a1a"}
+)
+
 var titleStyle = lipgloss.NewStyle().
 	Padding(1, 1, 0, 1).
-	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#dddddd"})
+	Foreground(itemTitleColor)
 
 var listDescStyle = lipgloss.NewStyle().
 	Padding(0, 1, 1, 1).
-	Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
+	Foreground(itemDescColor)
 
 var selectedTitleStyle = lipgloss.NewStyle().
 	Padding(1, 1, 0, 1).
-	Background(lipgloss.Color("#dde4f0")).
-	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#1a1a1a"})
+	Background(itemSelectedBg).
+	Foreground(itemSelectedColor)
 
 var selectedDescStyle = lipgloss.NewStyle().
 	Padding(0, 1, 1, 1).
-	Background(lipgloss.Color("#dde4f0")).
-	Foreground(lipgloss.AdaptiveColor{Light: "#1a1a1a", Dark: "#1a1a1a"})
+	Background(itemSelectedBg).
+	Foreground(itemSelectedColor)
 
 var mainTitle = lipgloss.NewStyle().
 	Background(lipgloss.Color("62")).
@@ -206,6 +216,79 @@ func (r *InstanceRenderer) setWidth(width int) {
 // dirIcon marks the second line, which holds the session's working directory.
 const dirIcon = "▸"
 
+// The four helpers below are what a session looks like, wherever it is drawn.
+// The list row and the mosaic cell differ in how much room they have, never in
+// what a badge, an icon, a path or a diff means — so the shape lives here once.
+
+// instanceMarker is the state of a session next to its name: the badge when it
+// is waiting on the developer, the state icon otherwise. spin is the spinner
+// frame for a session that is working, empty where there is no spinner to draw.
+// bg is the background the marker sits on, so it does not punch a hole in a
+// selected line. Badges keep their own background: that is what makes them read
+// as alerts.
+func instanceMarker(i *session.Instance, spin string, bg lipgloss.TerminalColor) (marker string, width int) {
+	switch {
+	case i.NeedsApproval:
+		return approvalBadgeStyle.Render(approvalBadge), runewidth.StringWidth(approvalBadge)
+	case i.NeedsAttention && i.Status == session.Ready:
+		return attentionBadgeStyle.Render(attentionBadge), runewidth.StringWidth(attentionBadge)
+	case spin != "" && (i.Status == session.Running || i.Status == session.Loading):
+		return fmt.Sprintf("%s ", spin), 2
+	case i.Status == session.Paused:
+		return pausedStyle.Background(bg).Render(pausedIcon), 2
+	case i.Status == session.Orphaned:
+		return orphanedStyle.Background(bg).Render(orphanedIcon), 2
+	case i.Status == session.Exited:
+		return orphanedStyle.Background(bg).Render(exitedIcon), 2
+	}
+	return readyStyle.Background(bg).Render(readyIcon), 2
+}
+
+// instanceTitleStyle colors a session's name by what it is waiting for: an
+// answer to read, a question to approve, or nothing at all.
+func instanceTitleStyle(i *session.Instance, base lipgloss.Style) lipgloss.Style {
+	switch {
+	case i.NeedsApproval:
+		return base.Foreground(approvalTitleStyle.GetForeground()).Bold(true)
+	case i.NeedsAttention && i.Status == session.Ready:
+		return base.Foreground(attentionTitleStyle.GetForeground()).Bold(true)
+	}
+	return base
+}
+
+// instanceSubtitle is the second line's text: the working directory, or what
+// became of it.
+func instanceSubtitle(i *session.Instance) string {
+	switch i.Status {
+	case session.Orphaned:
+		// Show the path that went missing so the state explains itself.
+		return "ausente: " + i.Path
+	case session.Exited:
+		// The directory is fine; the agent is the part that is gone. Say which
+		// key brings it back, because the state looks like a dead end.
+		return "agente caiu — r para subir de novo"
+	}
+	return i.Path
+}
+
+// instanceDiff is the +added,-removed of a session, empty when there is nothing
+// worth showing. It returns the text and its rendering separately because the
+// callers need the width to lay the line out.
+func instanceDiff(i *session.Instance, bg, fg lipgloss.TerminalColor) (rendered string, width int) {
+	stat := i.GetDiffStats()
+	if stat == nil || stat.Error != nil || stat.IsEmpty() {
+		return "", 0
+	}
+	added, removed := fmt.Sprintf("+%d", stat.Added), fmt.Sprintf("-%d ", stat.Removed)
+	rendered = lipgloss.JoinHorizontal(
+		lipgloss.Center,
+		addedLinesStyle.Background(bg).Render(added),
+		lipgloss.NewStyle().Background(bg).Foreground(fg).Render(","),
+		removedLinesStyle.Background(bg).Render(removed),
+	)
+	return rendered, runewidth.StringWidth(added) + runewidth.StringWidth(removed) + 1
+}
+
 func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, hasMultipleRepos bool) string {
 	prefix := fmt.Sprintf(" %d. ", idx)
 	if idx >= 10 {
@@ -217,35 +300,11 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		titleS = titleStyle
 		descS = listDescStyle
 	}
-	switch {
-	case i.NeedsApproval:
-		titleS = titleS.Foreground(approvalTitleStyle.GetForeground()).Bold(true)
-	case i.NeedsAttention && i.Status == session.Ready:
-		titleS = titleS.Foreground(attentionTitleStyle.GetForeground()).Bold(true)
-	}
+	titleS = instanceTitleStyle(i, titleS)
 
 	// add spinner next to title if it's running. markerWidth is how many columns
 	// the marker occupies, so the title can be given the rest.
-	var join string
-	markerWidth := 2
-	switch {
-	case i.NeedsApproval:
-		join = approvalBadgeStyle.Render(approvalBadge)
-		markerWidth = runewidth.StringWidth(approvalBadge)
-	case i.NeedsAttention && i.Status == session.Ready:
-		join = attentionBadgeStyle.Render(attentionBadge)
-		markerWidth = runewidth.StringWidth(attentionBadge)
-	case i.Status == session.Running, i.Status == session.Loading:
-		join = fmt.Sprintf("%s ", r.spinner.View())
-	case i.Status == session.Ready:
-		join = readyStyle.Render(readyIcon)
-	case i.Status == session.Paused:
-		join = pausedStyle.Render(pausedIcon)
-	case i.Status == session.Orphaned:
-		join = orphanedStyle.Render(orphanedIcon)
-	case i.Status == session.Exited:
-		join = orphanedStyle.Render(exitedIcon)
-	}
+	join, markerWidth := instanceMarker(i, r.spinner.View(), titleS.GetBackground())
 
 	// Cut the title if it's too long. The marker takes its columns first: an
 	// alert nobody can read is not an alert.
@@ -265,51 +324,21 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		join,
 	))
 
-	stat := i.GetDiffStats()
-
-	var diff string
-	var addedDiff, removedDiff string
-	if stat == nil || stat.Error != nil || stat.IsEmpty() {
-		// Don't show diff stats if there's an error or if they don't exist
-		addedDiff = ""
-		removedDiff = ""
-		diff = ""
-	} else {
-		addedDiff = fmt.Sprintf("+%d", stat.Added)
-		removedDiff = fmt.Sprintf("-%d ", stat.Removed)
-		diff = lipgloss.JoinHorizontal(
-			lipgloss.Center,
-			addedLinesStyle.Background(descS.GetBackground()).Render(addedDiff),
-			lipgloss.Style{}.Background(descS.GetBackground()).Foreground(descS.GetForeground()).Render(","),
-			removedLinesStyle.Background(descS.GetBackground()).Render(removedDiff),
-		)
-	}
+	diff, diffWidth := instanceDiff(i, descS.GetBackground(), descS.GetForeground())
 
 	remainingWidth := r.width
 	remainingWidth -= runewidth.StringWidth(prefix)
 	remainingWidth -= runewidth.StringWidth(dirIcon)
 	remainingWidth -= 2 // for the literal " " and "-" in the dirLine format string
-
-	diffWidth := runewidth.StringWidth(addedDiff) + runewidth.StringWidth(removedDiff)
-	if diffWidth > 0 {
-		diffWidth += 1
-	}
 	// Use fixed width for diff stats to avoid layout issues
 	remainingWidth -= diffWidth
 
 	// The second line is the working directory: it is what distinguishes one
 	// session from another when several agents run side by side.
-	subtitle := i.Path
+	subtitle := instanceSubtitle(i)
 	if !i.Started() && r.newInstanceHint != "" {
 		// Session being created: the second line is the creation form.
 		subtitle = r.newInstanceHint
-	} else if i.Status == session.Orphaned {
-		// Show the path that went missing so the state explains itself.
-		subtitle = "ausente: " + i.Path
-	} else if i.Status == session.Exited {
-		// The directory is fine; the agent is the part that is gone. Say which
-		// key brings it back, because the state looks like a dead end.
-		subtitle = "agente caiu — r para subir de novo"
 	}
 
 	// Don't show it if there's no space. Or show ellipsis if it's too long.
@@ -380,19 +409,14 @@ func (l *List) groupHeader(item *session.Instance, current string) (string, bool
 	return name, true
 }
 
-func (l *List) String() string {
+// Header is the coordinator's title bar: the word Sessões on the left and the
+// badges that belong to the account rather than to one session — the usage and
+// auto-yes — on the right. The mosaic draws the same bar, so the quota is on
+// screen whichever view is up.
+func (l *List) Header(width int) string {
 	const titleText = " Sessões "
 	const autoYesText = " auto-yes "
 
-	// Write the title. One blank line on top, matching the tab row's own
-	// leading line on the preview side — not two, which just pushed the list
-	// down without the preview following.
-	var b strings.Builder
-	b.WriteString("\n")
-
-	// Write title line
-	// add padding of 2 because the border on list items adds some extra characters
-	titleWidth := AdjustPreviewWidth(l.width) + 2
 	var badges []string
 	if quota := l.quotaBadge(); quota != "" {
 		badges = append(badges, quota)
@@ -401,17 +425,25 @@ func (l *List) String() string {
 		badges = append(badges, autoYesStyle.Render(autoYesText))
 	}
 	if len(badges) == 0 {
-		b.WriteString(lipgloss.Place(
-			titleWidth, 1, lipgloss.Left, lipgloss.Bottom, mainTitle.Render(titleText)))
-	} else {
-		title := lipgloss.Place(
-			titleWidth/2, 1, lipgloss.Left, lipgloss.Bottom, mainTitle.Render(titleText))
-		right := lipgloss.Place(
-			titleWidth-(titleWidth/2), 1, lipgloss.Right, lipgloss.Bottom,
-			lipgloss.JoinHorizontal(lipgloss.Bottom, badges...))
-		b.WriteString(lipgloss.JoinHorizontal(
-			lipgloss.Top, title, right))
+		return lipgloss.Place(width, 1, lipgloss.Left, lipgloss.Bottom, mainTitle.Render(titleText))
 	}
+	title := lipgloss.Place(
+		width/2, 1, lipgloss.Left, lipgloss.Bottom, mainTitle.Render(titleText))
+	right := lipgloss.Place(
+		width-(width/2), 1, lipgloss.Right, lipgloss.Bottom,
+		lipgloss.JoinHorizontal(lipgloss.Bottom, badges...))
+	return lipgloss.JoinHorizontal(lipgloss.Top, title, right)
+}
+
+func (l *List) String() string {
+	// Write the title. One blank line on top, matching the tab row's own
+	// leading line on the preview side — not two, which just pushed the list
+	// down without the preview following.
+	var b strings.Builder
+	b.WriteString("\n")
+
+	// add padding of 2 because the border on list items adds some extra characters
+	b.WriteString(l.Header(AdjustPreviewWidth(l.width) + 2))
 
 	b.WriteString("\n")
 	b.WriteString("\n")
@@ -556,6 +588,12 @@ func (l *List) GetSelectedInstance() *session.Instance {
 		return nil
 	}
 	return l.items[l.selectedIdx]
+}
+
+// SelectedIdx returns the position of the selected instance in the list. The
+// mosaic needs it to know which cell is highlighted and which page it sits on.
+func (l *List) SelectedIdx() int {
+	return l.selectedIdx
 }
 
 // SetSelectedInstance sets the selected index. Noop if the index is out of bounds.
