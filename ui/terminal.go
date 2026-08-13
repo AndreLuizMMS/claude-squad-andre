@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -108,7 +109,10 @@ func (t *TerminalPane) resizeLocked(s *terminalSession, width, height int) {
 // CaptureForInstance reads one instance's pane at an arbitrary size, without
 // changing which instance the pane is showing in the list view. The mosaic needs
 // every visible session captured, not only the selected one.
-func (t *TerminalPane) CaptureForInstance(instance *session.Instance, width, height int) (string, error) {
+// offset is how many lines above the live screen the read starts, so a mosaic
+// cell reading back through the shell's history gets the same treatment as one
+// reading back through the agent's.
+func (t *TerminalPane) CaptureForInstance(instance *session.Instance, width, height, offset int) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -136,7 +140,7 @@ func (t *TerminalPane) CaptureForInstance(instance *session.Instance, width, hei
 		return "", nil
 	}
 	t.resizeLocked(s, width, height)
-	content, err := s.tmuxSession.CapturePaneContent()
+	content, err := t.captureWindow(s, height, offset)
 	if err != nil {
 		// A read that fails is how a dead shell announces itself now that the
 		// existence check runs on a timer. Drop it so the next call rebuilds.
@@ -144,6 +148,48 @@ func (t *TerminalPane) CaptureForInstance(instance *session.Instance, width, hei
 		return "", err
 	}
 	return content, nil
+}
+
+// captureWindow reads the live screen, or a screenful from that far back in the
+// history. See Instance.PreviewWindow for how tmux numbers those lines.
+func (t *TerminalPane) captureWindow(s *terminalSession, height, offset int) (string, error) {
+	if offset <= 0 || height <= 0 {
+		return s.tmuxSession.CapturePaneContent()
+	}
+	return s.tmuxSession.CapturePaneContentWithOptions(
+		strconv.Itoa(-offset), strconv.Itoa(height-1-offset))
+}
+
+// HistoryForInstance is how far back one instance's shell can be read.
+func (t *TerminalPane) HistoryForInstance(instance *session.Instance) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if instance == nil {
+		return 0, nil
+	}
+	s, ok := t.sessions[instance.ID()]
+	if !ok || s.tmuxSession == nil {
+		return 0, nil
+	}
+	return s.tmuxSession.HistorySize()
+}
+
+// CursorForInstance is where the caret sits in one instance's shell, for the
+// mosaic cell showing it. Same reason as Instance.CursorPosition: the captured
+// characters say nothing about the caret.
+func (t *TerminalPane) CursorForInstance(instance *session.Instance) (x, y int, visible bool, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if instance == nil {
+		return 0, 0, false, nil
+	}
+	s, ok := t.sessions[instance.ID()]
+	if !ok || s.tmuxSession == nil {
+		return 0, 0, false, nil
+	}
+	return s.tmuxSession.CursorPosition()
 }
 
 // SendKeysToInstance types into one instance's pane. In the mosaic the cell that
