@@ -74,8 +74,9 @@ func TestStartTmuxSession(t *testing.T) {
 	require.Equal(t, 2, len(ptyFactory.cmds))
 	require.Equal(t, fmt.Sprintf("tmux new-session -d -s claudesquad_test-session -c %s claude", workdir),
 		cmd2.ToString(ptyFactory.cmds[0]))
-	require.Equal(t, "tmux attach-session -t claudesquad_test-session",
-		cmd2.ToString(ptyFactory.cmds[1]))
+	require.Equal(t, "tmux attach-session -t =claudesquad_test-session",
+		cmd2.ToString(ptyFactory.cmds[1]),
+		"the target is exact: a prefix match would attach to another agent's session")
 
 	require.Equal(t, 2, len(ptyFactory.files))
 
@@ -110,4 +111,47 @@ func TestMarkersMatchTheAgentBehindTheProgramPath(t *testing.T) {
 	if s.HasBusyMarker() {
 		t.Error("bash announces nothing and should have no busy marker")
 	}
+}
+
+// TestSplitCaptures: a batched read is one blob of text, and cutting it back
+// into one screen per session is the whole reason the batch is safe to use.
+func TestSplitCaptures(t *testing.T) {
+	out := captureMarker + "alpha\n" +
+		"line one\nline two\n" +
+		captureMarker + "beta\n" +
+		"only line\n"
+
+	got := splitCaptures(out, []string{"alpha", "beta"})
+
+	require.Equal(t, "line one\nline two\n", got["alpha"])
+	require.Equal(t, "only line\n", got["beta"])
+}
+
+// TestSplitCapturesIgnoresAMarkerPrintedByAnAgent: the delimiter is a plain
+// line of text, and an agent that happens to print one must not be able to
+// hand its screen to another session.
+func TestSplitCapturesIgnoresAMarkerPrintedByAnAgent(t *testing.T) {
+	out := captureMarker + "alpha\n" +
+		"real content\n" +
+		captureMarker + "not-a-session\n" +
+		"still alpha\n"
+
+	got := splitCaptures(out, []string{"alpha"})
+
+	require.Equal(t, 1, len(got))
+	require.Equal(t, "real content\n"+captureMarker+"not-a-session\nstill alpha\n", got["alpha"])
+}
+
+// TestSplitCapturesTruncatedBatch: tmux stops a sequence at the first command
+// that fails, so a session that died takes the rest of the batch with it. The
+// sessions that did come back must still be usable, and the ones that did not
+// must be absent rather than empty.
+func TestSplitCapturesTruncatedBatch(t *testing.T) {
+	out := captureMarker + "alpha\nalpha screen\n"
+
+	got := splitCaptures(out, []string{"alpha", "beta", "gamma"})
+
+	require.Equal(t, "alpha screen\n", got["alpha"])
+	_, ok := got["beta"]
+	require.False(t, ok, "a session the batch never reached must not look empty")
 }

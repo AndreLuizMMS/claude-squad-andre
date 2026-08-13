@@ -1,6 +1,71 @@
 package git
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+)
+
+// TestDiffBaseCache covers what the remembered answer is allowed to do: a plain
+// directory is asked again every time (it can be initialized while the session
+// is open), a directory with a commit is only asked once, and a repository that
+// disappears is forgotten instead of being trusted forever.
+func TestDiffBaseCache(t *testing.T) {
+	dir := t.TempDir()
+
+	// A plain directory has no base, and is never remembered as having one.
+	if got := DirectDiff(dir, true); got.Error != ErrNoDiffBase {
+		t.Fatalf("plain dir: got error %v, want ErrNoDiffBase", got.Error)
+	}
+	if diffBaseReady(dir) {
+		t.Fatal("plain dir was cached as having a diff base")
+	}
+
+	// The same directory, once it is a repository with a commit, answers and
+	// is remembered.
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("git unavailable or failing (%v): %s", err, out)
+		}
+	}
+	run("init")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "a.txt")
+	run("commit", "-m", "first")
+
+	if got := DirectDiff(dir, true); got.Error != nil {
+		t.Fatalf("repo with commit: unexpected error %v", got.Error)
+	}
+	if !diffBaseReady(dir) {
+		t.Fatal("repo with commit was not cached")
+	}
+
+	// The counters still come from the real diff while the cache is warm.
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := DirectDiff(dir, true); got.Added != 1 || got.Removed != 0 {
+		t.Fatalf("warm cache: got +%d-%d, want +1-0", got.Added, got.Removed)
+	}
+
+	// The repository going away drops the remembered answer.
+	if err := os.RemoveAll(filepath.Join(dir, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if got := DirectDiff(dir, true); got.Error == nil {
+		t.Fatal("removed repo: expected an error")
+	}
+	if diffBaseReady(dir) {
+		t.Fatal("removed repo stayed cached")
+	}
+}
 
 func TestParseNumstat(t *testing.T) {
 	tests := []struct {

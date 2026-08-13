@@ -492,3 +492,48 @@ func TestComputeUsageReadsLastAssistantUsageFromNewestTranscript(t *testing.T) {
 
 	assert.Nil(t, computeUsageFromTranscripts("/no/such/project"))
 }
+
+// TestCapturePanesReadsEachSessionsOwnScreen covers the batched read, which is
+// how a screenful of agents is observed with one tmux process instead of one
+// per session. Two things can go wrong and both are silent: the batch is cut
+// back into screens by marker lines, and tmux addresses sessions by prefix
+// unless told otherwise — so three sessions sharing a title prefix are exactly
+// the case where a cell would start showing another agent's work.
+func TestCapturePanesReadsEachSessionsOwnScreen(t *testing.T) {
+	dir := t.TempDir()
+
+	var instances []*Instance
+	for _, title := range []string{"a", "a-two", "a-two-three"} {
+		inst, err := NewInstance(InstanceOptions{Title: title, Path: dir, Program: "bash"})
+		require.NoError(t, err)
+		require.NoError(t, inst.Start(true))
+		defer func() { _ = inst.Kill() }()
+
+		instances = append(instances, inst)
+	}
+
+	// A shell that has not finished starting swallows what is typed at it, so
+	// the line is re-sent until every session has drawn its own.
+	var screens map[string]string
+	for attempt := 0; attempt < 30; attempt++ {
+		screens = CapturePanes(instances)
+		missing := false
+		for _, inst := range instances {
+			if strings.Contains(screens[inst.ID()], "screen-of-"+inst.Title) {
+				continue
+			}
+			missing = true
+			require.NoError(t, inst.SendKeys("echo screen-of-"+inst.Title+"\n"))
+		}
+		if !missing {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	require.Equal(t, len(instances), len(screens), "every session must come back from the batch")
+	for _, inst := range instances {
+		assert.Contains(t, screens[inst.ID()], "screen-of-"+inst.Title,
+			"session %q got somebody else's screen", inst.Title)
+	}
+}

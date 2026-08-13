@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // DiffStats holds statistics about the changes in a diff
@@ -29,6 +30,20 @@ func (d *DiffStats) IsEmpty() bool {
 // against. It is not a failure — sessions work on plain directories too.
 var ErrNoDiffBase = errors.New("no comparison base available (directory is not versioned)")
 
+// diffBase remembers the directories already known to be a repository with a
+// commit to compare against. Written from the background goroutines that read
+// each session's diff, so it is a sync.Map rather than a plain one.
+var diffBase sync.Map
+
+func diffBaseReady(dir string) bool {
+	_, ok := diffBase.Load(dir)
+	return ok
+}
+
+func markDiffBaseReady(dir string) { diffBase.Store(dir, struct{}{}) }
+
+func forgetDiffBase(dir string) { diffBase.Delete(dir) }
+
 // DirectDiff returns the uncommitted changes present in dir right now, without
 // touching the index: it never runs `git add -N`, because the directory belongs
 // to the developer and the coordinator must not act on versioning. Untracked
@@ -39,14 +54,23 @@ var ErrNoDiffBase = errors.New("no comparison base available (directory is not v
 func DirectDiff(dir string, numstatOnly bool) *DiffStats {
 	stats := &DiffStats{}
 
-	if !IsGitRepo(dir) {
-		stats.Error = ErrNoDiffBase
-		return stats
-	}
-	// An empty repository has no HEAD to compare against.
-	if err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "HEAD").Run(); err != nil {
-		stats.Error = ErrNoDiffBase
-		return stats
+	// The two questions below are asked of every session several times a
+	// minute, and they only ever change once: a directory that is a repository
+	// with a first commit stays one. Remembering the yes lets the common case
+	// cost one git process instead of three. The no is never cached — a
+	// directory can be initialized, and a repository can get its first commit,
+	// while the session is open.
+	if !diffBaseReady(dir) {
+		if !IsGitRepo(dir) {
+			stats.Error = ErrNoDiffBase
+			return stats
+		}
+		// An empty repository has no HEAD to compare against.
+		if err := exec.Command("git", "-C", dir, "rev-parse", "--verify", "HEAD").Run(); err != nil {
+			stats.Error = ErrNoDiffBase
+			return stats
+		}
+		markDiffBaseReady(dir)
 	}
 
 	args := []string{"-C", dir, "--no-pager", "diff", "HEAD"}
@@ -55,6 +79,9 @@ func DirectDiff(dir string, numstatOnly bool) *DiffStats {
 	}
 	out, err := exec.Command("git", args...).Output()
 	if err != nil {
+		// The remembered yes is now a lie — the repository was moved, removed
+		// or rewound. Forget it so the next round asks again from scratch.
+		forgetDiffBase(dir)
 		stats.Error = fmt.Errorf("failed to diff %s: %w", dir, err)
 		return stats
 	}

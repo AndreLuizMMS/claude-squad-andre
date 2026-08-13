@@ -1,6 +1,7 @@
 package session
 
 import (
+	"claude-squad/cmd"
 	"claude-squad/log"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
@@ -417,11 +418,44 @@ func (i *Instance) Preview() (string, error) {
 	return i.tmuxSession.CapturePaneContent()
 }
 
-func (i *Instance) HasUpdated() (updated bool, hasPrompt bool, busy bool) {
+func (i *Instance) HasUpdated() (updated bool, hasPrompt bool, busy bool, err error) {
 	if !i.started {
-		return false, false, false
+		return false, false, false, nil
 	}
 	return i.tmuxSession.HasUpdated()
+}
+
+// ApplyCapture answers the same questions HasUpdated does, from a screen that
+// was read in a batch instead of one process at a time.
+func (i *Instance) ApplyCapture(content string) (updated bool, hasPrompt bool, busy bool) {
+	if !i.started || i.tmuxSession == nil {
+		return false, false, false
+	}
+	return i.tmuxSession.Observe(content)
+}
+
+// CapturePanes reads the agent screens of several sessions with a single tmux
+// process and returns them keyed by session ID. Sessions with no terminal to
+// read are skipped, and so is any session whose read failed — the caller sees
+// them missing from the map and decides what that means.
+func CapturePanes(instances []*Instance) map[string]string {
+	byName := make(map[string]*Instance, len(instances))
+	names := make([]string, 0, len(instances))
+	for _, inst := range instances {
+		if inst == nil || inst.inactive() || inst.tmuxSession == nil {
+			continue
+		}
+		name := inst.tmuxSession.Name()
+		byName[name] = inst
+		names = append(names, name)
+	}
+
+	captured := tmux.CaptureMany(cmd.MakeExecutor(), names)
+	out := make(map[string]string, len(captured))
+	for name, content := range captured {
+		out[byName[name].ID()] = content
+	}
+	return out
 }
 
 // HasBusyMarker reports whether this session's agent says out loud when it is

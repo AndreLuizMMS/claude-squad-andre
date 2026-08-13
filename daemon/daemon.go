@@ -45,16 +45,34 @@ func RunDaemon(cfg *config.Config) error {
 		defer wg.Done()
 		ticker := time.NewTimer(pollInterval)
 		for {
+			// We only store started instances, but check anyway.
+			var active []*session.Instance
 			for _, instance := range instances {
-				// We only store started instances, but check anyway.
 				if instance.Started() && !instance.Paused() {
-					if _, hasPrompt, _ := instance.HasUpdated(); hasPrompt {
-						instance.TapEnter()
-						if err := instance.UpdateDiffStats(); err != nil {
-							if everyN.ShouldLog() {
-								log.WarningLog.Printf("could not update diff stats for %s: %v", instance.Title, err)
-							}
-						}
+					active = append(active, instance)
+				}
+			}
+			// Every screen in one tmux process: reading them one at a time made
+			// this loop cost as much as the coordinator itself once a developer
+			// had a screenful of sessions open.
+			screens := session.CapturePanes(active)
+
+			for _, instance := range active {
+				var hasPrompt bool
+				if content, ok := screens[instance.ID()]; ok {
+					_, hasPrompt, _ = instance.ApplyCapture(content)
+				} else {
+					// The batch stops at the first session it cannot read, so
+					// the ones that came after it are read on their own.
+					_, hasPrompt, _, _ = instance.HasUpdated()
+				}
+				if !hasPrompt {
+					continue
+				}
+				instance.TapEnter()
+				if err := instance.UpdateDiffStats(); err != nil {
+					if everyN.ShouldLog() {
+						log.WarningLog.Printf("could not update diff stats for %s: %v", instance.Title, err)
 					}
 				}
 			}

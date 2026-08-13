@@ -114,6 +114,26 @@ func NewTmuxSessionWithDeps(name string, program string, ptyFactory PtyFactory, 
 	return newTmuxSession(name, program, ptyFactory, cmdExec)
 }
 
+// exactTarget is how a tmux session must be addressed. Plain "-t name" falls
+// back to a prefix match when no session carries that name exactly, so killing
+// a session called "a-16f7e7" that had already died would instead kill
+// "a-6e6164" — a different agent, still working. Sessions are named after the
+// title the developer typed, and repeated titles are normal, so the prefixes
+// collide constantly. The leading "=" demands the exact name.
+func exactTarget(name string) string { return "=" + name }
+
+// exactPaneTarget is the same demand for the commands that address a pane or a
+// window rather than a session — capture-pane, set-option. Those parse the
+// name as the session half of "session:window.pane", so it needs the colon:
+// without it tmux rejects the "=" outright.
+func exactPaneTarget(name string) string { return "=" + name + ":" }
+
+// target is this session's exact tmux address.
+func (t *TmuxSession) target() string { return exactTarget(t.sanitizedName) }
+
+// paneTarget is this session's exact address for pane and window commands.
+func (t *TmuxSession) paneTarget() string { return exactPaneTarget(t.sanitizedName) }
+
 func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *TmuxSession {
 	return &TmuxSession{
 		sanitizedName: toClaudeSquadTmuxName(name),
@@ -138,7 +158,7 @@ func (t *TmuxSession) Start(workDir string) error {
 	if err != nil {
 		// Cleanup any partially created session if any exists.
 		if t.DoesSessionExist() {
-			cleanupCmd := exec.Command("tmux", "kill-session", "-t", t.sanitizedName)
+			cleanupCmd := exec.Command("tmux", "kill-session", "-t", t.target())
 			if cleanupErr := t.cmdExec.Run(cleanupCmd); cleanupErr != nil {
 				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
 			}
@@ -167,7 +187,7 @@ func (t *TmuxSession) Start(workDir string) error {
 	ptmx.Close()
 
 	// Set history limit to enable scrollback (default is 2000, we'll use 10000 for more history)
-	historyCmd := exec.Command("tmux", "set-option", "-t", t.sanitizedName, "history-limit", "10000")
+	historyCmd := exec.Command("tmux", "set-option", "-t", t.paneTarget(), "history-limit", "10000")
 	if err := t.cmdExec.Run(historyCmd); err != nil {
 		log.InfoLog.Printf("Warning: failed to set history-limit for session %s: %v", t.sanitizedName, err)
 	}
@@ -220,7 +240,7 @@ func (t *TmuxSession) CheckAndHandleTrustPrompt() bool {
 // app's mouse capture and do native selection instead. Reapplied on every
 // restore in case a session was created before this existed.
 func (t *TmuxSession) enableMouse() {
-	cmd := exec.Command("tmux", "set-option", "-t", t.sanitizedName, "mouse", "on")
+	cmd := exec.Command("tmux", "set-option", "-t", t.paneTarget(), "mouse", "on")
 	if err := t.cmdExec.Run(cmd); err != nil {
 		log.InfoLog.Printf("Warning: failed to enable tmux mouse mode for session %s: %v", t.sanitizedName, err)
 	}
@@ -246,7 +266,7 @@ func (t *TmuxSession) setScrollSpeed() {
 
 func (t *TmuxSession) Restore() error {
 	t.enableMouse()
-	ptmx, err := t.ptyFactory.Start(exec.Command("tmux", "attach-session", "-t", t.sanitizedName))
+	ptmx, err := t.ptyFactory.Start(exec.Command("tmux", "attach-session", "-t", t.target()))
 	if err != nil {
 		return fmt.Errorf("error opening PTY: %w", err)
 	}
@@ -298,13 +318,24 @@ func (t *TmuxSession) SendKeys(keys string) error {
 // HasUpdated checks if the tmux pane content has changed since the last tick. It also returns true if
 // the tmux pane has a prompt for aider or claude code, and whether the agent
 // still says it is working.
-func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool, busy bool) {
+//
+// A capture failure is reported rather than swallowed: it is the same signal a
+// dead terminal gives, and the caller is the one that can tell the two apart
+// without paying for an extra tmux call on every healthy round.
+func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool, busy bool, err error) {
 	content, err := t.CapturePaneContent()
 	if err != nil {
 		log.ErrorLog.Printf("error capturing pane content in status monitor: %v", err)
-		return false, false, false
+		return false, false, false, err
 	}
+	updated, hasPrompt, busy = t.Observe(content)
+	return updated, hasPrompt, busy, nil
+}
 
+// Observe draws the same conclusions HasUpdated does, from a screen that was
+// already read. Batched reads capture many sessions with one tmux process, so
+// the capture and the reading of it are separate steps.
+func (t *TmuxSession) Observe(content string) (updated bool, hasPrompt bool, busy bool) {
 	m := t.markers()
 	if m.prompt != "" {
 		hasPrompt = strings.Contains(content, m.prompt)
@@ -313,11 +344,101 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool, busy bool) {
 		busy = strings.Contains(strings.ToLower(content), m.busy)
 	}
 
-	if !bytes.Equal(t.monitor.hash(content), t.monitor.prevOutputHash) {
-		t.monitor.prevOutputHash = t.monitor.hash(content)
+	// Hashed once: the pane is a screenful of text and this runs for every
+	// session twice a second.
+	sum := t.monitor.hash(content)
+	if !bytes.Equal(sum, t.monitor.prevOutputHash) {
+		t.monitor.prevOutputHash = sum
 		return true, hasPrompt, busy
 	}
 	return false, hasPrompt, busy
+}
+
+// Name is the tmux session name behind this session, which is what a batched
+// read has to address.
+func (t *TmuxSession) Name() string { return t.sanitizedName }
+
+// captureMarker prefixes the line a batched read emits before each session's
+// screen. It is deliberately improbable: a pane that printed this line by
+// coincidence would be mistaken for a delimiter.
+const captureMarker = "@@claude-squad-capture@@"
+
+// CaptureMany reads the screens of several tmux sessions using a single tmux
+// process, and returns them keyed by session name.
+//
+// One process per session is what made a screenful of agents slow: spawning
+// tmux costs about as much as everything else in a round put together, and a
+// round reads every session twice a second. tmux runs a sequence of commands
+// in one invocation, so twenty reads cost one spawn instead of twenty.
+//
+// A sequence stops at the first command that fails, so a session that died
+// between being listed and being read truncates the rest of the batch. The
+// names that came back short are simply absent from the map, and the caller
+// falls back to reading those one by one.
+func CaptureMany(cmdExec cmd.Executor, names []string) map[string]string {
+	if len(names) == 0 {
+		return nil
+	}
+
+	args := make([]string, 0, len(names)*9)
+	for i, name := range names {
+		if i > 0 {
+			args = append(args, ";")
+		}
+		args = append(args,
+			"display-message", "-p", captureMarker+name, ";",
+			"capture-pane", "-p", "-e", "-J", "-t", exactPaneTarget(name))
+	}
+
+	// Output, not CombinedOutput: a truncated batch writes its error to stderr
+	// and the screens read so far are still on stdout, and still good.
+	out, _ := cmdExec.Output(exec.Command("tmux", args...))
+	if len(out) == 0 {
+		return nil
+	}
+	return splitCaptures(string(out), names)
+}
+
+// splitCaptures cuts a batched read back into one screen per session, using
+// the marker lines the batch interleaved between them.
+func splitCaptures(out string, names []string) map[string]string {
+	wanted := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		wanted[name] = struct{}{}
+	}
+
+	result := make(map[string]string, len(names))
+	current := ""
+	var body []string
+	flush := func() {
+		if current != "" {
+			// Whether a screen is followed by the next marker or by the end of
+			// the batch decides whether its last newline survives the split.
+			// Normalizing to the single trailing newline a lone capture-pane
+			// produces keeps a session's screen — and therefore the hash that
+			// says whether it changed — identical either way.
+			joined := strings.TrimSuffix(strings.Join(body, "\n"), "\n")
+			if joined != "" {
+				joined += "\n"
+			}
+			result[current] = joined
+		}
+		body = body[:0]
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if name, ok := strings.CutPrefix(line, captureMarker); ok {
+			if _, isWanted := wanted[name]; isWanted {
+				flush()
+				current = name
+				continue
+			}
+		}
+		if current != "" {
+			body = append(body, line)
+		}
+	}
+	flush()
+	return result
 }
 
 // detachKeyByte is ctrl+l: the key that leaves an attached session and returns
@@ -490,7 +611,7 @@ func (t *TmuxSession) Close() error {
 		t.ptmx = nil
 	}
 
-	cmd := exec.Command("tmux", "kill-session", "-t", t.sanitizedName)
+	cmd := exec.Command("tmux", "kill-session", "-t", t.target())
 	if err := t.cmdExec.Run(cmd); err != nil {
 		errs = append(errs, fmt.Errorf("error killing tmux session: %w", err))
 	}
@@ -527,14 +648,14 @@ func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 
 func (t *TmuxSession) DoesSessionExist() bool {
 	// Using "-t name" does a prefix match, which is wrong. `-t=` does an exact match.
-	existsCmd := exec.Command("tmux", "has-session", fmt.Sprintf("-t=%s", t.sanitizedName))
+	existsCmd := exec.Command("tmux", "has-session", "-t", t.target())
 	return t.cmdExec.Run(existsCmd) == nil
 }
 
 // CapturePaneContent captures the content of the tmux pane
 func (t *TmuxSession) CapturePaneContent() (string, error) {
 	// Add -e flag to preserve escape sequences (ANSI color codes)
-	cmd := exec.Command("tmux", "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
+	cmd := exec.Command("tmux", "capture-pane", "-p", "-e", "-J", "-t", t.paneTarget())
 	output, err := t.cmdExec.Output(cmd)
 	if err != nil {
 		return "", fmt.Errorf("error capturing pane content: %v", err)
@@ -546,7 +667,7 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 // start and end specify the starting and ending line numbers (use "-" for the start/end of history)
 func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, error) {
 	// Add -e flag to preserve escape sequences (ANSI color codes)
-	cmd := exec.Command("tmux", "capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.sanitizedName)
+	cmd := exec.Command("tmux", "capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.paneTarget())
 	output, err := t.cmdExec.Output(cmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to capture tmux pane content with options: %v", err)
@@ -577,7 +698,7 @@ func CleanupSessions(cmdExec cmd.Executor) error {
 
 	for _, match := range matches {
 		log.InfoLog.Printf("cleaning up session: %s", match)
-		if err := cmdExec.Run(exec.Command("tmux", "kill-session", "-t", match)); err != nil {
+		if err := cmdExec.Run(exec.Command("tmux", "kill-session", "-t", exactTarget(match))); err != nil {
 			return fmt.Errorf("failed to kill tmux session %s: %v", match, err)
 		}
 	}
