@@ -736,6 +736,13 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	// Mouse selection is a mode, and ctrl+c is what ends a mode: it is the key
+	// the hand is already on after copying. It comes before the mosaic and before
+	// quit so the way out is the same wherever the mode was turned on.
+	if m.mouseSelect && msg.String() == "ctrl+c" {
+		return m, m.toggleMouseSelect()
+	}
+
 	// The mosaic gets the press before anything else: while a cell holds the
 	// keyboard, even q and ctrl+c belong to the agent, not to the coordinator.
 	if m.viewMode == viewMosaic {

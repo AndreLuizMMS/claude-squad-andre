@@ -76,7 +76,8 @@ func (h helpTypeGeneral) toContent() string {
 		headerStyle.Render("Outros:"),
 		keyStyle.Render("tab")+descStyle.Render("       - Alternar entre as abas Claude Code, Cursor CLI e Bash"),
 		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Rolar a prévia ou o terminal"),
-		keyStyle.Render("y")+descStyle.Render("         - Devolver o mouse ao terminal para selecionar e copiar texto; enquanto isso a roda não rola"),
+		keyStyle.Render("ctrl-space")+descStyle.Render("- Devolver o mouse ao terminal para selecionar e copiar texto; enquanto isso a roda não rola"),
+		keyStyle.Render("ctrl-c")+descStyle.Render("    - Voltar do modo de seleção com o mouse para o modo normal"),
 		keyStyle.Render("q")+descStyle.Render("         - Sair do aplicativo"),
 	)
 	return content

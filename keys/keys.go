@@ -71,7 +71,10 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	" ":          KeyNextAttention,
 	"p":          KeySendPrompt,
 	"v":          KeyViewMode,
-	"y":          KeyMouseSelect,
+	// ctrl+space arrives as ctrl+@ on most terminals (they send NUL for it), but
+	// a few spell it out — both are the same key to the developer pressing it.
+	"ctrl+@":     KeyMouseSelect,
+	"ctrl+space": KeyMouseSelect,
 	"ctrl+r":     KeyRenameAgent,
 }
 
@@ -165,8 +168,8 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	),
 
 	KeyMouseSelect: key.NewBinding(
-		key.WithKeys("y"),
-		key.WithHelp("y", "selecionar com o mouse"),
+		key.WithKeys("ctrl+@", "ctrl+space"),
+		key.WithHelp("ctrl-space", "selecionar com o mouse"),
 	),
 
 	KeyRenameAgent: key.NewBinding(
