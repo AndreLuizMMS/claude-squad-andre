@@ -18,7 +18,7 @@ Na prática: nada de preparar branch, nada de conciliar worktree, nada de limpar
 
 Outras adições:
 
-- **Renomear** sessão já criada (`R`) e **abrir a pasta no editor** (`e`, padrão `cursor`).
+- **Renomear** sessão já criada (`R`) e **abrir a pasta no editor** (`ctrl-e`, padrão `cursor`).
 - **Configuração** de editor, limite de sessões e som de aviso.
 - **Pedido de aprovação** tem marcador próprio (`⏵ APROVAR`): agente parado numa pergunta bloqueia, resposta pronta só espera.
 - **Agente que cai** vira estado próprio (`✖`) em vez de continuar com a bolinha verde; `r` sobe de novo retomando a conversa.
@@ -55,11 +55,29 @@ Fluxo: `n` cria a sessão (pede título, diretório — com autocomplete — e a
 | `n` / `N` | Criar sessão / criar já com prompt |
 | `↵` `o` / `ctrl-l` | Entrar na sessão / voltar para a lista |
 | `c` / `r` / `D` | Pausar / retomar (ou subir agente caído) / encerrar |
-| `R` / `e` | Renomear / abrir diretório no editor |
+| `R` / `ctrl-e` | Renomear / abrir diretório no editor |
 | `espaço` / `p` | Pular para a próxima sessão que respondeu / mandar prompt sem entrar |
 | `↑↓` `jk` / `J` `K` | Navegar / reordenar |
 | `tab` / `shift-↑↓` | Trocar entre Claude Code, Cursor CLI e Bash / rolar a aba |
+| `v` | Alternar entre a lista e o mosaico com todas as sessões |
 | `?` / `q` | Ajuda / sair |
+
+### Mosaico
+
+`v` divide a tela igualmente entre todas as sessões. Cada célula abre com as
+mesmas duas linhas da lista — número, nome, marcador de estado e, embaixo, o
+diretório com o diff — mais a faixa que diz qual painel está vivo ali (Claude
+Code, Cursor CLI ou Bash). A barra de título com o consumo continua no topo.
+Nada some quando você vai conversar com um deles: `↵` dá o teclado à célula em
+destaque — a borda fica amarela — e o que você digita vai direto para aquele
+agente enquanto os outros continuam pintando ao lado. `ctrl-l` devolve o
+teclado ao coordenador, `o` abre a sessão em tela cheia, `D` encerra a sessão em destaque na hora, `v` volta para a lista.
+
+As setas são literais: `←` vai para a célula da esquerda, `↓` para a de baixo.
+Com mais de um projeto aberto, o mosaico separa por pasta igual à lista — cada
+projeto ganha sua faixa colorida e nenhuma linha mistura dois projetos. Quando
+não cabem todas com tamanho legível, o mosaico pagina sozinho ao chegar na borda.
+Criar sessão (`n`) abre o formulário de nome e diretório no centro da tela.
 
 ## Configuração
 
@@ -85,7 +103,7 @@ Fluxo: `n` cria a sessão (pede título, diretório — com autocomplete — e a
 | `disable_bell` | `true` desliga o som de quando o agente devolve a vez |
 | `disable_notify` | `true` desliga a notificação do sistema |
 | `notify_command` | Comando da notificação. Recebe título e texto como últimos argumentos. Vazio: detecta `notify-send`, `wsl-notify-send.exe` ou `osascript` |
-| `editor_command` | Comando da tecla `e`. Vazio: `$VISUAL`, depois `$EDITOR`, depois `cursor` |
+| `editor_command` | Comando da tecla `ctrl-e`. Vazio: `$VISUAL`, depois `$EDITOR`, depois `cursor` |
 | `max_sessions` | Quantas sessões cabem ao mesmo tempo (padrão 10) |
 | `profiles` | Agentes oferecidos na criação de sessão |
 
