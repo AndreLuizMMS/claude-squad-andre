@@ -59,7 +59,7 @@ Cada sessão carrega um marcador do lado do nome, na lista e no mosaico:
 - **Agente que morre vira estado próprio** em vez de continuar com a bolinha verde — e a queda também é anunciada. O estado é lido pelo **nome do comando** da sessão, não por heurística frágil de texto na tela.
 - `espaço` **pula para a próxima sessão que respondeu**. `p` **manda prompt sem entrar** na sessão.
 - `R` renomeia a sessão **aqui**; `ctrl-r` manda `/rename` **para o agente**, que renomeia a conversa dele.
-- `y` **devolve o mouse ao terminal** para selecionar e copiar texto com o mouse, como em qualquer outro programa. Enquanto está ligado a roda não rola nada (o terminal fica com os eventos); `y` de novo devolve o mouse ao aplicativo.
+- `ctrl-space` **devolve o mouse ao terminal** para selecionar e copiar texto com o mouse, como em qualquer outro programa. Enquanto está ligado a roda não rola nada (o terminal fica com os eventos); `ctrl-space` de novo — ou `ctrl-c`, depois de copiar — devolve o mouse ao aplicativo.
 
 ### 1.3 Mosaico — todas as sessões na tela (`v`)
 
@@ -74,7 +74,7 @@ Modo de tela novo, que não existe no original. `v` divide a tela igualmente ent
 - As **setas são literais**: `←` vai para a célula da esquerda, `↓` para a de baixo.
 - `shift-↑` / `shift-↓` (ou a **roda do mouse**) leem o **histórico daquela célula** sem parar as outras: a célula congela no trecho que você está lendo, marca `↑N` no título e volta ao vivo com `esc` — ou sozinha, assim que você digitar nela.
 - `tab` troca o painel **daquela célula** — cada sessão pode estar mostrando um painel diferente.
-- Com mais de um projeto aberto, o mosaico **separa por pasta** igual à lista, cada projeto com sua faixa colorida, sem misturar dois projetos na mesma linha.
+- Com mais de um projeto aberto, o mosaico **separa por pasta** igual à lista: cada projeto vira uma **coluna própria, lado a lado**, com sua faixa colorida no topo e suas sessões empilhadas dentro dela. Abrir um segundo projeto estreita o primeiro em vez de empurrá-lo para cima.
 - Quando não cabem todas com tamanho legível, o mosaico **pagina sozinho** ao chegar na borda.
 - `n` no mosaico abre o formulário de nome e diretório no centro da tela.
 - O modo escolhido (lista ou mosaico) é **lembrado** entre execuções.
