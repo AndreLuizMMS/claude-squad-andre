@@ -80,6 +80,13 @@ type Instance struct {
 	// Claude Code session running in this instance.
 	usageStats *UsageStats
 
+	// titleWatch holds the name every transcript of this working directory
+	// carried when '/rename' was sent, and is non-nil only while the answer is
+	// still on its way. It is what keeps the name from arriving one press late,
+	// or from a sibling session: the name that counts is one written after the
+	// request, not whatever was already on file.
+	titleWatch map[string]string
+
 	// The below fields are initialized upon calling Start().
 
 	started bool
@@ -860,12 +867,64 @@ type titleLine struct {
 	AITitle     string `json:"aiTitle"`
 }
 
-// AgentTitle is the name the agent's own conversation carries, read from its
-// transcript. A name set by hand ('/rename') wins over the one Claude Code
-// picks by itself, whichever was written last. Empty when the conversation has
-// no name yet — a fresh session, or one whose transcript isn't there.
-func (i *Instance) AgentTitle() string {
-	return lastTitleInFile(latestTranscript(i.Path))
+// RequestAgentTitle asks the agent to name its own conversation and starts
+// waiting for the answer. Whatever name was on file until now is forgotten:
+// the session takes the next name the agent writes, so the answer to this
+// request is the one that lands, not the previous one.
+func (i *Instance) RequestAgentTitle() error {
+	i.titleWatch = titlesByTranscript(i.Path)
+	if err := i.SendPrompt("/rename"); err != nil {
+		i.titleWatch = nil
+		return err
+	}
+	return nil
+}
+
+// PollAgentTitle returns the name the agent wrote in answer to the last
+// RequestAgentTitle, or "" while the answer hasn't arrived. A transcript whose
+// name is unchanged since the request is ignored — that is how a session picks
+// its own name out of a working directory several sessions share, since they
+// all write into the same transcript folder.
+func (i *Instance) PollAgentTitle() string {
+	if i.titleWatch == nil {
+		return ""
+	}
+	for path, title := range titlesByTranscript(i.Path) {
+		if title == "" || title == i.titleWatch[path] {
+			continue
+		}
+		i.titleWatch = nil
+		return title
+	}
+	return ""
+}
+
+// titlesByTranscript is the name carried by each transcript of workDir, keyed
+// by file. Claude Code keys its transcripts by working directory, not by
+// session, so this is every conversation ever run there.
+//
+// ponytail: reads the tail of every transcript in the folder; only runs while a
+// rename is in flight, so the folder is walked twice a second at most and only
+// for the session that asked.
+func titlesByTranscript(workDir string) map[string]string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return map[string]string{}
+	}
+	projectDir := filepath.Join(home, ".claude", "projects", claudeProjectDirName(workDir))
+	entries, err := os.ReadDir(projectDir)
+	if err != nil {
+		return map[string]string{}
+	}
+	titles := make(map[string]string, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".jsonl" {
+			continue
+		}
+		path := filepath.Join(projectDir, e.Name())
+		titles[path] = lastTitleInFile(path)
+	}
+	return titles
 }
 
 // lastTitleInFile scans the tail of a transcript for the conversation's name.

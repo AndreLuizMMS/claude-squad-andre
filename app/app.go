@@ -739,29 +739,17 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyMouseSelect:
 		return m, m.toggleMouseSelect()
 	case keys.KeyRenameAgent:
-		// One name, both places, typed once: if the agent already named its own
-		// conversation, ctrl+r copies that name into the list; otherwise it asks
-		// the agent to name itself first.
+		// Every press asks the agent to name itself again, named or not, and the
+		// session then waits for that answer instead of copying the name already
+		// on file — which was the previous answer, or a sibling session's.
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {
 			return m, nil
 		}
-		title := selected.AgentTitle()
-		if title == "" {
-			// No name yet: ask the agent to name itself instead of failing.
-			// Next ctrl+r, once it has answered, copies the name over.
-			if err := selected.SendPrompt("/rename"); err != nil {
-				return m, m.handleError(err)
-			}
-			return m, nil
-		}
-		if err := selected.SetTitle(title); err != nil {
+		if err := selected.RequestAgentTitle(); err != nil {
 			return m, m.handleError(err)
 		}
-		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
-			return m, m.handleError(err)
-		}
-		return m, m.instanceChanged()
+		return m, nil
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyPrompt:
@@ -1146,6 +1134,18 @@ func (m *home) applyMetadataResults(results []instanceMetaResult) (finished bool
 			m.busyTicks[id] = 0
 		}
 
+		// The answer to a ctrl+r: the agent named its conversation, so the
+		// session takes the same name.
+		if r.agentTitle != "" {
+			if err := r.instance.SetTitle(r.agentTitle); err != nil {
+				log.WarningLog.Printf("could not rename session: %v", err)
+			} else if m.storage != nil {
+				if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+					log.WarningLog.Printf("could not save renamed session: %v", err)
+				}
+			}
+		}
+
 		if !r.diffRead {
 			continue
 		}
@@ -1268,6 +1268,9 @@ type instanceMetaResult struct {
 	// previous numbers stay on screen instead of being wiped by a read that
 	// never happened.
 	diffRead bool
+	// agentTitle is the name the agent wrote in answer to a ctrl+r, empty when
+	// no rename is in flight or the answer hasn't landed yet.
+	agentTitle string
 }
 
 // metadataUpdateDoneMsg is sent when the background metadata update completes.
@@ -1354,6 +1357,9 @@ func tickUpdateMetadataCmd(active []*session.Instance, tick int) tea.Cmd {
 					}
 				}
 				r.hasBusyMarker = instance.HasBusyMarker()
+				// Reads the transcript only while a ctrl+r is waiting on its
+				// answer, so this costs nothing the rest of the time.
+				r.agentTitle = instance.PollAgentTitle()
 				if !heavyReadDue(tick, i) {
 					return
 				}

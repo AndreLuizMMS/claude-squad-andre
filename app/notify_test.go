@@ -311,3 +311,19 @@ func TestADeadSessionIsNoLongerWatched(t *testing.T) {
 	assert.Empty(t, h.snapshotActiveInstances(),
 		"reading a terminal that is gone only fills the log with the same failure")
 }
+
+// TestAgentNameLandsOnTheSessionWhenItArrives closes ctrl+r's loop: the name
+// the agent writes is picked up by the background round and renames the session
+// in the list, however long the agent took to answer.
+func TestAgentNameLandsOnTheSessionWhenItArrives(t *testing.T) {
+	h := newTestHome(t)
+	inst := startedInstance(t, "sessao-2")
+	h.list.AddInstance(inst)()
+
+	// No answer yet: the session keeps the name it had.
+	h.applyMetadataResults([]instanceMetaResult{{instance: inst}})
+	assert.Equal(t, "sessao-2", inst.Title)
+
+	h.applyMetadataResults([]instanceMetaResult{{instance: inst, agentTitle: "nome-do-agente"}})
+	assert.Equal(t, "nome-do-agente", inst.Title)
+}

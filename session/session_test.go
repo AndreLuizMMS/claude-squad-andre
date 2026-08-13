@@ -506,11 +506,8 @@ func TestAgentTitleReadsTheConversationName(t *testing.T) {
 	projectDir := filepath.Join(home, ".claude", "projects", claudeProjectDirName(workDir))
 	require.NoError(t, os.MkdirAll(projectDir, 0755))
 
-	inst, err := NewInstance(InstanceOptions{Title: "sem-nome", Path: workDir, Program: "bash"})
-	require.NoError(t, err)
-
 	// No transcript yet: nothing to copy.
-	assert.Equal(t, "", inst.AgentTitle())
+	assert.Equal(t, "", lastTitleInFile(latestTranscript(workDir)))
 
 	transcript := filepath.Join(projectDir, "session.jsonl")
 	lines := strings.Join([]string{
@@ -521,11 +518,51 @@ func TestAgentTitleReadsTheConversationName(t *testing.T) {
 	}, "\n") + "\n"
 	require.NoError(t, os.WriteFile(transcript, []byte(lines), 0644))
 
-	assert.Equal(t, "cs-copia-nome-do-agente", inst.AgentTitle())
+	assert.Equal(t, "cs-copia-nome-do-agente", lastTitleInFile(latestTranscript(workDir)))
 
 	// Only the automatic title: it is the name on offer.
 	require.NoError(t, os.WriteFile(transcript, []byte(`{"type":"ai-title","aiTitle":"So o automatico"}`+"\n"), 0644))
-	assert.Equal(t, "So o automatico", inst.AgentTitle())
+	assert.Equal(t, "So o automatico", lastTitleInFile(latestTranscript(workDir)))
+}
+
+// TestRenameWaitsForTheAnswerItAskedFor is the off-by-one ctrl+r used to have:
+// it copied the name already on file, which was the previous answer — or, when
+// several sessions run in the same directory and therefore share the transcript
+// folder, another session's name entirely.
+func TestRenameWaitsForTheAnswerItAskedFor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	workDir := filepath.Join(home, "work")
+	require.NoError(t, os.MkdirAll(workDir, 0755))
+	projectDir := filepath.Join(home, ".claude", "projects", claudeProjectDirName(workDir))
+	require.NoError(t, os.MkdirAll(projectDir, 0755))
+
+	// A sibling session in the same directory, already named, and this session's
+	// own transcript still carrying the name of a previous ctrl+r.
+	sibling := filepath.Join(projectDir, "sessao-1.jsonl")
+	require.NoError(t, os.WriteFile(sibling, []byte(`{"type":"custom-title","customTitle":"nome-da-sessao-1"}`+"\n"), 0644))
+	own := filepath.Join(projectDir, "sessao-2.jsonl")
+	require.NoError(t, os.WriteFile(own, []byte(`{"type":"custom-title","customTitle":"nome-antigo"}`+"\n"), 0644))
+
+	inst, err := NewInstance(InstanceOptions{Title: "sessao-2", Path: workDir, Program: "bash"})
+	require.NoError(t, err)
+	require.NoError(t, inst.Start(true))
+	defer func() { _ = inst.Kill() }()
+
+	// Nothing is waiting on a name until ctrl+r asks for one.
+	assert.Equal(t, "", inst.PollAgentTitle())
+
+	require.NoError(t, inst.RequestAgentTitle())
+	assert.Equal(t, "", inst.PollAgentTitle(),
+		"neither the sibling's name nor its own previous one counts as the answer")
+
+	// The agent answers.
+	require.NoError(t, os.WriteFile(own, []byte(`{"type":"custom-title","customTitle":"nome-novo"}`+"\n"), 0644))
+	assert.Equal(t, "nome-novo", inst.PollAgentTitle())
+
+	// The answer is taken once: the wait is over until the next ctrl+r.
+	assert.Equal(t, "", inst.PollAgentTitle())
 }
 
 // TestCapturePanesReadsEachSessionsOwnScreen covers the batched read, which is
