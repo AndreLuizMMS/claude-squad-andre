@@ -12,6 +12,7 @@ import (
 
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -864,6 +865,42 @@ func (i *Instance) PreviewFullHistory() (string, error) {
 		return "", nil
 	}
 	return i.tmuxSession.CapturePaneContentWithOptions("-", "-")
+}
+
+// PreviewWindow captures a screenful of the session as it looked `offset` lines
+// above the live screen. Offset zero is the live screen itself, so the same call
+// serves a cell that is following the agent and one that is reading back.
+//
+// tmux counts line 0 at the top of what is on screen and counts into the
+// scrollback with negative numbers, which is why a window of `height` lines
+// ending `offset` above the bottom is exactly -offset to height-1-offset. tmux
+// clamps a start beyond the oldest line it kept, so scrolling past the top of
+// the history stops there instead of coming back empty.
+func (i *Instance) PreviewWindow(offset, height int) (string, error) {
+	if i.inactive() {
+		return "", nil
+	}
+	if offset <= 0 || height <= 0 {
+		return i.tmuxSession.CapturePaneContent()
+	}
+	return i.tmuxSession.CapturePaneContentWithOptions(
+		strconv.Itoa(-offset), strconv.Itoa(height-1-offset))
+}
+
+// HistorySize is how far back this session can be read.
+func (i *Instance) HistorySize() (int, error) {
+	if i.inactive() {
+		return 0, nil
+	}
+	return i.tmuxSession.HistorySize()
+}
+
+// CursorPosition is where the caret sits on this session's screen.
+func (i *Instance) CursorPosition() (x, y int, visible bool, err error) {
+	if i.inactive() {
+		return 0, 0, false, nil
+	}
+	return i.tmuxSession.CursorPosition()
 }
 
 // SetTmuxSession sets the tmux session for testing purposes

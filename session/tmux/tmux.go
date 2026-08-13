@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -673,6 +674,57 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 		return "", fmt.Errorf("failed to capture tmux pane content with options: %v", err)
 	}
 	return string(output), nil
+}
+
+// CursorPosition is where the caret sits inside the pane, in columns and rows
+// counted from the top left of what is on screen, and whether the program
+// running there is showing it at all.
+//
+// It has to be asked for separately because capture-pane returns the characters
+// of the screen and nothing about the caret: a captured screen looks exactly the
+// same whether the agent is waiting for input or has hidden the cursor mid-run.
+func (t *TmuxSession) CursorPosition() (x, y int, visible bool, err error) {
+	cmd := exec.Command("tmux", "display-message", "-p", "-t", t.paneTarget(),
+		"#{cursor_x} #{cursor_y} #{cursor_flag}")
+	out, err := t.cmdExec.Output(cmd)
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("error reading cursor position: %v", err)
+	}
+	return parseCursor(string(out))
+}
+
+// HistorySize is how many lines tmux is still holding above the visible screen.
+// It is the ceiling on scrolling back: asking for a window that starts before
+// the oldest line tmux kept does not fail, it comes back short, which would draw
+// a cell half full of nothing.
+func (t *TmuxSession) HistorySize() (int, error) {
+	cmd := exec.Command("tmux", "display-message", "-p", "-t", t.paneTarget(), "#{history_size}")
+	out, err := t.cmdExec.Output(cmd)
+	if err != nil {
+		return 0, fmt.Errorf("error reading history size: %v", err)
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, fmt.Errorf("unexpected history size: %q", strings.TrimSpace(string(out)))
+	}
+	return n, nil
+}
+
+// parseCursor reads the three fields tmux prints back. A tmux too old to know
+// cursor_flag prints the name back unexpanded, which is read as "no cursor"
+// rather than as an error: the screen is still worth drawing without a caret.
+func parseCursor(out string) (x, y int, visible bool, err error) {
+	fields := strings.Fields(out)
+	if len(fields) < 3 {
+		return 0, 0, false, fmt.Errorf("unexpected cursor format: %q", strings.TrimSpace(out))
+	}
+	if x, err = strconv.Atoi(fields[0]); err != nil {
+		return 0, 0, false, fmt.Errorf("unexpected cursor column: %q", fields[0])
+	}
+	if y, err = strconv.Atoi(fields[1]); err != nil {
+		return 0, 0, false, fmt.Errorf("unexpected cursor row: %q", fields[1])
+	}
+	return x, y, fields[2] == "1", nil
 }
 
 // CleanupSessions kills all tmux sessions that start with "session-"

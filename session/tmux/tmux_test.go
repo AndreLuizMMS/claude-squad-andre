@@ -155,3 +155,39 @@ func TestSplitCapturesTruncatedBatch(t *testing.T) {
 	_, ok := got["beta"]
 	require.False(t, ok, "a session the batch never reached must not look empty")
 }
+
+// The caret is read from a line of tmux output, so what that line can look like
+// decides whether a cell draws a caret in the right place, no caret, or a caret
+// somewhere wrong.
+func TestParseCursor(t *testing.T) {
+	tests := []struct {
+		name              string
+		out               string
+		wantX, wantY      int
+		wantVisible, fail bool
+	}{
+		{name: "cursor showing", out: "10 4 1\n", wantX: 10, wantY: 4, wantVisible: true},
+		{name: "cursor hidden by the program", out: "0 0 0\n", wantVisible: false},
+		{name: "tmux too old to expand the fields", out: "#{cursor_x}\n", fail: true},
+		{name: "nothing came back", out: "", fail: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			x, y, visible, err := parseCursor(tt.out)
+			if tt.fail {
+				if err == nil {
+					t.Fatalf("parseCursor(%q) devia falhar", tt.out)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseCursor(%q): %v", tt.out, err)
+			}
+			if x != tt.wantX || y != tt.wantY || visible != tt.wantVisible {
+				t.Errorf("parseCursor(%q) = %d,%d,%v; esperado %d,%d,%v",
+					tt.out, x, y, visible, tt.wantX, tt.wantY, tt.wantVisible)
+			}
+		})
+	}
+}
