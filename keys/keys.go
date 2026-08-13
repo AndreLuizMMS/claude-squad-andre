@@ -37,6 +37,13 @@ const (
 	KeySendPrompt    // Send a prompt to the selected session without attaching
 
 	KeyViewMode // Switch between the list view and the mosaic of every session
+
+	// KeyMouseSelect hands the mouse back to the terminal so text can be
+	// selected and copied with it.
+	KeyMouseSelect
+
+	// KeyRenameAgent types the agent's own rename command into the session.
+	KeyRenameAgent
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -64,6 +71,8 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	" ":          KeyNextAttention,
 	"p":          KeySendPrompt,
 	"v":          KeyViewMode,
+	"y":          KeyMouseSelect,
+	"ctrl+r":     KeyRenameAgent,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -153,6 +162,16 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyViewMode: key.NewBinding(
 		key.WithKeys("v"),
 		key.WithHelp("v", "mosaico"),
+	),
+
+	KeyMouseSelect: key.NewBinding(
+		key.WithKeys("y"),
+		key.WithHelp("y", "selecionar com o mouse"),
+	),
+
+	KeyRenameAgent: key.NewBinding(
+		key.WithKeys("ctrl+r"),
+		key.WithHelp("ctrl-r", "renomear no agente"),
 	),
 
 	// -- Special keybindings --

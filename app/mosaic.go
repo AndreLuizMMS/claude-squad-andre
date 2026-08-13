@@ -81,6 +81,16 @@ func keyToBytes(msg tea.KeyMsg) string {
 // the coordinator's normal keys, which keeps n/D/R/e/o meaning the same thing
 // in both view modes.
 func (m *home) handleMosaicKey(msg tea.KeyMsg) (cmd tea.Cmd, handled bool) {
+	// Reading back through a cell's history works whether or not the cell holds
+	// the keyboard: shift is what keeps these two out of the agent's way, since
+	// no agent reads shift+arrow as anything.
+	if lines, ok := mosaicScroll(msg.String()); ok {
+		if m.mosaic.Scroll(m.list.GetSelectedInstance(), lines) {
+			return m.instanceChanged(), true
+		}
+		return nil, true
+	}
+
 	// Focused: the agent owns the keyboard. Only the key that gives the screen
 	// back to the coordinator is held back — everything else is the developer
 	// talking to the agent, including q and D.
@@ -100,6 +110,13 @@ func (m *home) handleMosaicKey(msg tea.KeyMsg) (cmd tea.Cmd, handled bool) {
 		// Typing into a session is the developer having seen it answer.
 		instance.NeedsAttention = false
 		return nil, true
+	}
+
+	// Esc brings the highlighted cell back to the live screen. It is only spelled
+	// out for the cell that is actually frozen: esc with nothing to leave falls
+	// through to whatever else it means.
+	if msg.Type == tea.KeyEsc && m.mosaic.ScrollToLive(m.list.GetSelectedInstance()) {
+		return m.instanceChanged(), true
 	}
 
 	// Navigating: enter takes the keyboard into the highlighted cell. It is
@@ -131,6 +148,25 @@ func (m *home) handleMosaicKey(msg tea.KeyMsg) (cmd tea.Cmd, handled bool) {
 	}
 	m.list.SetSelectedInstance(m.mosaic.Move(m.list.GetInstances(), m.list.SelectedIdx(), dCol, dRow))
 	return m.instanceChanged(), true
+}
+
+// mosaicScrollStep is how many lines one notch of the wheel, or one press of
+// shift+arrow, walks back through a cell's history. Three is what a wheel notch
+// scrolls in a terminal, and a cell is short enough that one line at a time
+// would take a hundred presses to reach the top of an answer.
+const mosaicScrollStep = 3
+
+// mosaicScroll translates a key into a walk through the highlighted cell's
+// history, counted in lines away from the live screen: up goes into the past,
+// the way a terminal reads it.
+func mosaicScroll(key string) (lines int, ok bool) {
+	switch key {
+	case "shift+up":
+		return mosaicScrollStep, true
+	case "shift+down":
+		return -mosaicScrollStep, true
+	}
+	return 0, false
 }
 
 // mosaicDirection translates a navigation key into a step on the grid.
@@ -169,6 +205,28 @@ func (m *home) toggleViewMode() tea.Cmd {
 		m.syncSessionSizes()
 	}
 	return m.instanceChanged()
+}
+
+// agentRenameCommand is what the agent is asked to do when the rename key is
+// pressed. It is the agent's own slash command, sent as a line of input, not
+// anything the coordinator does to its own record of the session — that is R.
+const agentRenameCommand = "/rename"
+
+// toggleMouseSelect hands the mouse to the terminal and back.
+//
+// While the app asks for mouse reporting, every click and drag is delivered to
+// it as an event and the terminal never sees them — which is why dragging over
+// a command an agent printed selects nothing. Giving the reporting up puts the
+// terminal back in charge of the mouse, so selecting and copying work exactly as
+// they do in any other program. The wheel is what it costs: those events stop
+// arriving too, so scrolling a cell goes back to shift+arrows while this is on.
+func (m *home) toggleMouseSelect() tea.Cmd {
+	m.mouseSelect = !m.mouseSelect
+	m.menu.SetMouseSelect(m.mouseSelect)
+	if m.mouseSelect {
+		return tea.DisableMouse
+	}
+	return tea.EnableMouseCellMotion
 }
 
 // syncSessionSizes gives every session the terminal shape of the view it is

@@ -127,6 +127,12 @@ type home struct {
 	// mosaicCount is how many sessions the mosaic cells were last sized for.
 	mosaicCount int
 
+	// mouseSelect is on while the mouse has been handed back to the terminal.
+	// A program that asks for mouse reporting takes the drag away from the
+	// terminal, and with it the only way to select text and copy it — so
+	// selecting is a mode, entered on purpose, that trades the wheel for it.
+	mouseSelect bool
+
 	// keySent is used to manage underlining menu items
 	keySent bool
 
@@ -308,6 +314,19 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
 				selected := m.list.GetSelectedInstance()
 				if selected == nil || selected.Status == session.Paused {
+					return m, nil
+				}
+
+				// In the mosaic the wheel belongs to the highlighted cell: it is
+				// the one the border points at and the one the arrows move.
+				if m.viewMode == viewMosaic {
+					lines := mosaicScrollStep
+					if msg.Button == tea.MouseButtonWheelDown {
+						lines = -mosaicScrollStep
+					}
+					if m.mosaic.Scroll(selected, lines) {
+						return m, m.instanceChanged()
+					}
 					return m, nil
 				}
 
@@ -764,6 +783,26 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	switch name {
 	case keys.KeyViewMode:
 		return m, m.toggleViewMode()
+	case keys.KeyMouseSelect:
+		return m, m.toggleMouseSelect()
+	case keys.KeyRenameAgent:
+		// The agent names its own session, and the command that does it is a line
+		// of text like any other — so this is the prompt key with the line already
+		// written. It goes to the agent even when the cell is showing a shell:
+		// /rename means nothing to bash.
+		selected := m.list.GetSelectedInstance()
+		if selected == nil || selected.Status == session.Loading {
+			return m, nil
+		}
+		if !selected.Started() || selected.Paused() || selected.HasExited() {
+			return m, m.handleError(fmt.Errorf(
+				"a sessão '%s' não está rodando — retome antes de renomear", selected.Title))
+		}
+		if err := selected.SendPrompt(agentRenameCommand); err != nil {
+			return m, m.handleError(err)
+		}
+		selected.NeedsAttention = false
+		return m, m.instanceChanged()
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyPrompt:
