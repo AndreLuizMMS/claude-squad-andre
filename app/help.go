@@ -49,6 +49,8 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("ctrl-l")+descStyle.Render("    - Sair da sessão e voltar para a lista"),
 		keyStyle.Render("espaço")+descStyle.Render("    - Pular para a próxima sessão que respondeu"),
 		keyStyle.Render("p")+descStyle.Render("         - Mandar um prompt sem entrar na sessão"),
+		keyStyle.Render("R")+descStyle.Render("         - Renomear a sessão aqui no Claude Squad"),
+		keyStyle.Render("ctrl-r")+descStyle.Render("    - Mandar '/rename' para o agente renomear a conversa dele"),
 		keyStyle.Render("ctrl-e")+descStyle.Render("    - Abrir o diretório da sessão no editor"),
 		"",
 		headerStyle.Render("Mosaico (todas as sessões na tela):"),
@@ -56,6 +58,8 @@ func (h helpTypeGeneral) toContent() string {
 		keyStyle.Render("←↑↓→")+descStyle.Render("      - Andar pela grade na direção da seta"),
 		keyStyle.Render("↵")+descStyle.Render("         - Digitar na célula em destaque, sem sair do mosaico"),
 		keyStyle.Render("tab")+descStyle.Render("       - Trocar o painel da célula: Claude Code, Cursor CLI, Bash"),
+		keyStyle.Render("shift-↑/↓")+descStyle.Render(" - Ler o histórico da célula em destaque; a roda do mouse faz o mesmo"),
+		keyStyle.Render("esc")+descStyle.Render("       - Voltar a célula para a tela ao vivo"),
 		keyStyle.Render("ctrl-l")+descStyle.Render("    - Devolver o teclado ao coordenador"),
 		keyStyle.Render("o")+descStyle.Render("         - Abrir a sessão em destaque em tela cheia"),
 		keyStyle.Render("D")+descStyle.Render("         - Encerrar a sessão em destaque, sem confirmação"),
@@ -72,6 +76,7 @@ func (h helpTypeGeneral) toContent() string {
 		headerStyle.Render("Outros:"),
 		keyStyle.Render("tab")+descStyle.Render("       - Alternar entre as abas Claude Code, Cursor CLI e Bash"),
 		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Rolar a prévia ou o terminal"),
+		keyStyle.Render("y")+descStyle.Render("         - Devolver o mouse ao terminal para selecionar e copiar texto; enquanto isso a roda não rola"),
 		keyStyle.Render("q")+descStyle.Render("         - Sair do aplicativo"),
 	)
 	return content

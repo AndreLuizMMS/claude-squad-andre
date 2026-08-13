@@ -56,6 +56,11 @@ type Menu struct {
 	// the panel of one cell instead of the tab of the pane.
 	inMosaic bool
 
+	// mouseSelect is on while the mouse belongs to the terminal, which is the
+	// one state the menu has to announce: nothing else on screen says why the
+	// wheel stopped scrolling.
+	mouseSelect bool
+
 	// keyDown is the key which is pressed. The default is -1.
 	keyDown keys.KeyName
 }
@@ -112,15 +117,27 @@ func (m *Menu) SetInMosaic(inMosaic bool) {
 	m.inMosaic = inMosaic
 }
 
+// SetMouseSelect tells the menu whether the mouse is currently the terminal's.
+func (m *Menu) SetMouseSelect(on bool) {
+	m.mouseSelect = on
+	m.updateOptions()
+}
+
 // mosaicDescs are the keys the mosaic reads differently from the list.
 var mosaicDescs = map[keys.KeyName]string{
 	keys.KeyViewMode: "voltar à lista",
 	keys.KeyTab:      "trocar painel",
 	keys.KeyEnter:    "digitar na célula",
+	keys.KeyShiftUp:  "rolar a célula",
 }
 
 // describe is the help text of a key in the view the menu is under.
 func (m *Menu) describe(name keys.KeyName, binding key.Binding) string {
+	// The selection key reads as the way out while it is on: it is a mode, and a
+	// mode that does not say how to leave is a trap.
+	if name == keys.KeyMouseSelect && m.mouseSelect {
+		return "voltar o mouse ao app"
+	}
 	if m.inMosaic {
 		if desc, ok := mosaicDescs[name]; ok {
 			return desc
@@ -182,13 +199,14 @@ func (m *Menu) addInstanceOptions() {
 		actionGroup = append(actionGroup, keys.KeyPause)
 	}
 
-	// Navigation group (when the pane has history to scroll)
-	if m.activeTab != PreviewTab {
+	// Navigation group, offered wherever there is a history to read: the terminal
+	// pane of the list view, and every cell of the mosaic.
+	if m.inMosaic || m.activeTab != PreviewTab {
 		actionGroup = append(actionGroup, keys.KeyShiftUp)
 	}
 
 	// System group
-	systemGroup := []keys.KeyName{keys.KeyViewMode, keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
+	systemGroup := []keys.KeyName{keys.KeyViewMode, keys.KeyMouseSelect, keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
 
 	// Combine all groups
 	options = append(options, actionGroup...)
