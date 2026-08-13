@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -35,10 +36,12 @@ const (
 	cellFrameWidth  = 2
 	cellFrameHeight = 2
 
-	// cellGap is the column left between two cells side by side. Without it the
+	// cellGap is the columns left between two cells side by side. Without it the
 	// two borders touch and read as one thick seam, which made the grid look like
-	// a table instead of a set of separate agents.
-	cellGap = 1
+	// a table instead of a set of separate agents. Two columns instead of one
+	// because the selected cell now draws a heavy border, and a single column of
+	// air was not enough to keep it from touching its neighbour.
+	cellGap = 2
 
 	// cellTitleHeight is the title block inside a cell: the name line plus a
 	// blank line separating it from the agent's own output.
@@ -56,21 +59,25 @@ const slowCellEveryNTicks = 5
 var mosaicPanelNames = []string{"Claude Code", "Cursor CLI", "Bash $"}
 
 var (
-	mosaicFocusColor = lipgloss.Color("#ffd23f")
+	// Green, and only for the cell that is actually taking keystrokes. Typing into
+	// the wrong agent is the one mistake the mosaic can cause, so the cell that
+	// owns the keyboard is the loudest thing on screen.
+	mosaicFocusColor = lipgloss.Color("#00ff87")
 
 	mosaicCellStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.AdaptiveColor{Light: "#d0d0d0", Dark: "#3a3a3a"})
 
-	// The focused cell is marked, not shouted at: the developer already knows
-	// where they are typing, so a colored border and a colored title are enough.
-	// A filled bar over the title competed with the agent's own output.
+	// The cursor and the keyboard both draw a heavy border: at cell size a thin
+	// line in another color was easy to lose among nine boxes. The colors keep
+	// them apart — purple is "the arrows are here", green is "your typing goes
+	// here".
 	mosaicFocusedCellStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
+				Border(lipgloss.ThickBorder()).
 				BorderForeground(mosaicFocusColor)
 
 	mosaicSelectedCellStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
+				Border(lipgloss.ThickBorder()).
 				BorderForeground(highlightColor)
 
 	// A cell writes the same two lines a list row writes — name then directory.
@@ -114,12 +121,85 @@ var (
 				Bold(true).
 				Foreground(highlightColor)
 
+	// The scroll marker borrows the focus color: a cell frozen in its own past is
+	// as much a mode as a cell holding the keyboard, and both are states the
+	// developer has to be able to leave.
+	mosaicScrollStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(mosaicFocusColor)
+
 	mosaicIdleStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.AdaptiveColor{Light: "#999999", Dark: "#666666"})
 
 	mosaicFooterStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.AdaptiveColor{Light: "#808080", Dark: "#808080"})
 )
+
+// sgrSequence matches the color and style codes tmux hands back with the screen.
+var sgrSequence = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+// dimColor is deliberately a mid gray and not a dark one: a cell nobody is
+// typing into still has to be readable at a glance — that is the whole point of
+// having every agent on screen — it just stops competing with the one that is.
+const dimColor = "\x1b[38;5;245m"
+
+// dim repaints a captured line in one flat gray, colors and bold included. It is
+// what makes the cells around the cursor read as switched off without dropping,
+// wrapping or moving a single character of what the agent wrote.
+func dim(line string) string {
+	return dimColor + sgrSequence.ReplaceAllString(line, dimColor)
+}
+
+// The caret is drawn the way a terminal draws its own: the character under it in
+// reverse video. Reverse rather than a colored block because the block would
+// hide the character being typed over, and reverse is what the same agent shows
+// when the session is opened full screen.
+const (
+	caretOn  = "\x1b[7m"
+	caretOff = "\x1b[27m"
+)
+
+// paintCaret puts the caret at a column of a captured line. It counts printable
+// columns rather than bytes — a line arrives with its colors still in it, and
+// those take no space on screen — and pads the line out when the caret sits past
+// the last character written, which is where a caret waiting for input is.
+func paintCaret(line string, col int) string {
+	if col < 0 {
+		return line
+	}
+
+	var b strings.Builder
+	width, inEscape := 0, false
+	for _, r := range line {
+		switch {
+		case inEscape:
+			b.WriteRune(r)
+			// A sequence ends at its first letter; everything before that is
+			// parameters and has no width of its own.
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEscape = false
+			}
+			continue
+		case r == '\x1b':
+			inEscape = true
+			b.WriteRune(r)
+			continue
+		case width == col:
+			b.WriteString(caretOn)
+			b.WriteRune(r)
+			b.WriteString(caretOff)
+		default:
+			b.WriteRune(r)
+		}
+		width += runewidth.RuneWidth(r)
+	}
+
+	if width <= col {
+		b.WriteString(strings.Repeat(" ", col-width))
+		b.WriteString(caretOn + " " + caretOff)
+	}
+	return b.String()
+}
 
 // gridRow is one line of the mosaic: cells that sit side by side and, when
 // several projects are open, all belong to the same project. A row never mixes
@@ -330,6 +410,20 @@ type Mosaic struct {
 	// not in the map are on the agent, which is what the mosaic is for.
 	panel map[string]int
 
+	// scroll is how many lines above the live screen each cell is reading, so a
+	// cell can be walked back through the conversation while the others keep
+	// following their agents. Zero — the default — is following.
+	scroll map[string]int
+
+	// cursor is where the caret sits in the cell under the selection, read on its
+	// own because a captured screen carries the characters and not the caret.
+	// Only one cell is asked for it: it costs a tmux call, and the caret only
+	// answers a question about the cell being typed into.
+	cursorID      string
+	cursorX       int
+	cursorY       int
+	cursorVisible bool
+
 	// terminal and agent are the same panes the list view uses, so a shell
 	// opened in one view is the same shell in the other.
 	terminal, agent *TerminalPane
@@ -339,6 +433,7 @@ func NewMosaic(terminal, agent *TerminalPane) *Mosaic {
 	return &Mosaic{
 		content:  make(map[string]string),
 		panel:    make(map[string]int),
+		scroll:   make(map[string]int),
 		terminal: terminal,
 		agent:    agent,
 	}
@@ -396,12 +491,96 @@ func (m *Mosaic) CyclePanel(instance *session.Instance) {
 	if instance == nil {
 		return
 	}
+	// The panels have separate histories, so a cell that was reading back through
+	// the shell would land at an arbitrary point in the agent's. Every panel
+	// opens where it is now.
+	m.ScrollToLive(instance)
 	m.panel[instance.ID()] = (m.panelOf(instance) + 1) % len(mosaicPanelNames)
+}
+
+// maxScrollback is where scrolling up stops asking for more. tmux keeps a
+// bounded history and clamps a read that starts before it, so the only thing a
+// higher number would buy is a key that appears to do nothing.
+const maxScrollback = 10000
+
+// ScrollOf is how far back the cell of a session is reading, in lines.
+func (m *Mosaic) ScrollOf(instance *session.Instance) int {
+	if instance == nil {
+		return 0
+	}
+	return m.scroll[instance.ID()]
+}
+
+// Scroll walks a cell back through its own history — up is into the past — and
+// reports whether anything moved. The cell stops following the agent until it
+// is scrolled back to the bottom, which is what makes reading a long answer
+// possible while the agent keeps writing.
+func (m *Mosaic) Scroll(instance *session.Instance, lines int) bool {
+	if instance == nil || !instance.Started() || instance.Paused() {
+		return false
+	}
+	id := instance.ID()
+	next := m.scroll[id] + lines
+	if next < 0 {
+		next = 0
+	}
+	// The ceiling is asked for only when going up, and only on the press that
+	// would cross it: it costs a tmux call, and it does not change while the
+	// developer is reading. Stopping at it is what keeps a cell full — a window
+	// starting before the oldest line tmux kept comes back short.
+	if next > m.scroll[id] {
+		if limit := m.historyOf(instance); next > limit {
+			next = limit
+		}
+	}
+	if next > maxScrollback {
+		next = maxScrollback
+	}
+	if next == m.scroll[id] {
+		return false
+	}
+	if next == 0 {
+		delete(m.scroll, id)
+	} else {
+		m.scroll[id] = next
+	}
+	return true
+}
+
+// historyOf is how far back the terminal behind a cell can be read. A read that
+// fails answers zero, which pins the cell to the live screen rather than letting
+// it scroll into a window nobody can prove exists.
+func (m *Mosaic) historyOf(instance *session.Instance) int {
+	var n int
+	var err error
+	if pane := m.paneOf(instance); pane != nil {
+		n, err = pane.HistoryForInstance(instance)
+	} else {
+		n, err = instance.HistorySize()
+	}
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// ScrollToLive puts a cell back on the agent's live screen.
+func (m *Mosaic) ScrollToLive(instance *session.Instance) bool {
+	if instance == nil || m.scroll[instance.ID()] == 0 {
+		return false
+	}
+	delete(m.scroll, instance.ID())
+	return true
 }
 
 // SendKeys types into whichever terminal the cell is showing. Typing into a
 // Bash cell has to reach that shell, not the agent behind it.
 func (m *Mosaic) SendKeys(instance *session.Instance, keys string) error {
+	// Typing is a terminal's own way of saying "take me back to the bottom": the
+	// answer to what was just typed is at the live screen, not where the cell was
+	// left reading.
+	m.ScrollToLive(instance)
+
 	switch pane := m.paneOf(instance); {
 	case pane != nil:
 		return pane.SendKeysToInstance(instance, keys)
@@ -497,16 +676,19 @@ func (m *Mosaic) UpdateContent(instances []*session.Instance, selectedIdx, tick 
 
 	slowRound := tick%slowCellEveryNTicks == 0
 
-	// Cells showing their own agent are read together, in one tmux process for
-	// the whole grid: this runs on the drawing thread, and one process per cell
-	// froze the screen for as long as it took to walk the grid. The cells
-	// showing a shell keep their own read — they may need a resize first.
+	// Cells showing their own agent live are read together, in one tmux process
+	// for the whole grid: this runs on the drawing thread, and one process per
+	// cell froze the screen for as long as it took to walk the grid. Cells
+	// showing a shell, and cells scrolled back into their history, ask for
+	// something the batch cannot give — a resize first, or a window of the
+	// scrollback — so they keep their own read.
 	var agents []*session.Instance
-	type shellCell struct {
+	type ownRead struct {
 		inst          *session.Instance
 		width, height int
+		offset        int
 	}
-	var shells []shellCell
+	var own []ownRead
 
 	for _, row := range m.grid(instances) {
 		for c, i := range row.idx {
@@ -517,19 +699,20 @@ func (m *Mosaic) UpdateContent(instances []*session.Instance, selectedIdx, tick 
 			if inst != m.focused && !slowRound {
 				continue
 			}
-			if m.paneOf(inst) == nil {
+			offset := m.scroll[inst.ID()]
+			if m.paneOf(inst) == nil && offset == 0 {
 				agents = append(agents, inst)
 				continue
 			}
-			shells = append(shells, shellCell{inst, row.width[c], row.height - cellTitleHeight})
+			own = append(own, ownRead{inst, row.width[c], row.height - cellTitleHeight, offset})
 		}
 	}
 
 	for id, content := range session.CapturePanes(agents) {
 		m.content[contentKey(id, PreviewTab)] = content
 	}
-	for _, cell := range shells {
-		content, err := m.capture(cell.inst, cell.width, cell.height)
+	for _, cell := range own {
+		content, err := m.capture(cell.inst, cell.width, cell.height, cell.offset)
 		if err != nil {
 			// A capture that fails is not worth an error box: the next tick
 			// tries again, and the cell keeps showing what it had.
@@ -537,17 +720,52 @@ func (m *Mosaic) UpdateContent(instances []*session.Instance, selectedIdx, tick 
 		}
 		m.content[contentKey(cell.inst.ID(), m.panelOf(cell.inst))] = content
 	}
+
+	m.readCursor(instances, selectedIdx)
 }
 
-// capture reads whichever terminal the cell is showing, at cell size.
-func (m *Mosaic) capture(instance *session.Instance, width, height int) (string, error) {
+// readCursor asks tmux where the caret is in the cell under the selection. Only
+// that one cell is asked — it is the only one the developer can type into — and
+// only while it is following its terminal: a cell scrolled back into the history
+// is showing a screen the caret has long left.
+func (m *Mosaic) readCursor(instances []*session.Instance, selectedIdx int) {
+	m.cursorID, m.cursorVisible = "", false
+
+	if selectedIdx < 0 || selectedIdx >= len(instances) {
+		return
+	}
+	inst := instances[selectedIdx]
+	if inst == nil || !inst.Started() || inst.Paused() || m.scroll[inst.ID()] != 0 {
+		return
+	}
+	if inst.HasExited() && m.panelOf(inst) == PreviewTab {
+		return
+	}
+
+	var x, y int
+	var visible bool
+	var err error
+	if pane := m.paneOf(inst); pane != nil {
+		x, y, visible, err = pane.CursorForInstance(inst)
+	} else {
+		x, y, visible, err = inst.CursorPosition()
+	}
+	if err != nil {
+		return
+	}
+	m.cursorID, m.cursorX, m.cursorY, m.cursorVisible = inst.ID(), x, y, visible
+}
+
+// capture reads whichever terminal the cell is showing, at cell size, from
+// `offset` lines above the live screen.
+func (m *Mosaic) capture(instance *session.Instance, width, height, offset int) (string, error) {
 	if pane := m.paneOf(instance); pane != nil {
-		return pane.CaptureForInstance(instance, width, height)
+		return pane.CaptureForInstance(instance, width, height, offset)
 	}
 	if instance.HasExited() {
 		return "", fmt.Errorf("agente encerrado")
 	}
-	return instance.Preview()
+	return instance.PreviewWindow(offset, height)
 }
 
 // contentKey separates the cached capture of each panel: switching a cell to
@@ -562,6 +780,7 @@ func (m *Mosaic) Forget(id string) {
 		delete(m.content, contentKey(id, panel))
 	}
 	delete(m.panel, id)
+	delete(m.scroll, id)
 	if m.focused != nil && m.focused.ID() == id {
 		m.focused = nil
 	}
@@ -653,7 +872,18 @@ func (m *Mosaic) renderCell(instance *session.Instance, idx, width, height int, 
 
 	title := m.cellTitleLine(instance, idx, width, selected)
 	dir := m.cellDirLine(instance, width, selected)
-	body := m.cellBody(instance, width, height-cellTitleHeight)
+	// Everything except the cell under the cursor is dimmed. The cursor and the
+	// keyboard are the same cell in practice — focus is taken on the selected one
+	// — so the test reads as "the cell the developer is on stays lit".
+	// The caret is drawn only where it was read: the selected cell, following its
+	// terminal. A caret painted in a cell nobody can type into would be pointing
+	// at the wrong keyboard.
+	caretX, caretY := -1, -1
+	if m.cursorVisible && instance != nil && instance.ID() == m.cursorID {
+		caretX, caretY = m.cursorX, m.cursorY
+	}
+	body := m.cellBody(instance, width, height-cellTitleHeight,
+		!selected && instance != m.focused, caretX, caretY)
 
 	// MaxWidth/MaxHeight are the guarantee that one cell can never push the
 	// others off screen: a session that emitted a line wider than its cell —
@@ -698,12 +928,27 @@ func (m *Mosaic) cellTitleLine(instance *session.Instance, idx, width int, selec
 	}
 	label := prefix + title + " "
 
+	// A cell reading back through its history says so, because it is the one
+	// state where the cell is not showing what the agent is doing right now — and
+	// nothing else on screen would give that away.
+	back := ""
+	if n := m.scroll[instance.ID()]; n > 0 {
+		back = mosaicScrollStyle.Background(bg).Render(fmt.Sprintf("↑%d ", n))
+	}
+
 	// The whole strip when it fits, the active panel alone when it does not:
 	// which terminal is live is the part that cannot be guessed from the content.
-	badge := m.panelStrip(instance, true, bg) + " "
+	badge := back + m.panelStrip(instance, true, bg) + " "
 	gap := width - runewidth.StringWidth(label) - markerWidth - lipgloss.Width(badge)
 	if gap < 1 {
-		badge = m.panelStrip(instance, false, bg) + " "
+		badge = back + m.panelStrip(instance, false, bg) + " "
+		gap = width - runewidth.StringWidth(label) - markerWidth - lipgloss.Width(badge)
+	}
+	// Down to the last columns the scroll marker outlives the panel names: which
+	// terminal a cell shows can be read from what it prints, that it is frozen in
+	// the past cannot.
+	if gap < 1 {
+		badge = back
 		gap = width - runewidth.StringWidth(label) - markerWidth - lipgloss.Width(badge)
 	}
 	if gap < 1 {
@@ -775,7 +1020,7 @@ func (m *Mosaic) panelStrip(instance *session.Instance, all bool, bg lipgloss.Te
 }
 
 // cellBody is the session's own screen, or the reason there isn't one.
-func (m *Mosaic) cellBody(instance *session.Instance, width, height int) string {
+func (m *Mosaic) cellBody(instance *session.Instance, width, height int, dimmed bool, caretX, caretY int) string {
 	if height < 1 {
 		return ""
 	}
@@ -790,18 +1035,30 @@ func (m *Mosaic) cellBody(instance *session.Instance, width, height int) string 
 
 	content := m.content[contentKey(instance.ID(), m.panelOf(instance))]
 	lines := strings.Split(content, "\n")
+
+	// The rows are settled before anything is drawn on them, because the caret is
+	// given as a row of the terminal and dropping rows off the top moves every
+	// row under it.
+	if over := len(lines) - height; over > 0 {
+		// The session is sized to the cell, so extra lines mean the terminal
+		// was just resized and the capture has not caught up. Keep the newest.
+		lines = lines[over:]
+		caretY -= over
+	} else {
+		lines = append(lines, make([]string, -over)...)
+	}
+
 	// Truncating each line is what keeps a cell one cell tall. Padding to the
 	// full width on the way out keeps the borders straight.
 	fit := lipgloss.NewStyle().MaxWidth(width).Width(width)
 	for i, line := range lines {
+		if dimmed {
+			line = dim(line)
+		}
+		if i == caretY && caretX >= 0 && caretX < width {
+			line = paintCaret(line, caretX)
+		}
 		lines[i] = fit.Render(line)
-	}
-	if len(lines) > height {
-		// The session is sized to the cell, so extra lines mean the terminal
-		// was just resized and the capture has not caught up. Keep the newest.
-		lines = lines[len(lines)-height:]
-	} else {
-		lines = append(lines, make([]string, height-len(lines))...)
 	}
 	return strings.Join(lines, "\n")
 }

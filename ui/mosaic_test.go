@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"claude-squad/cmd/cmd_test"
 	"claude-squad/session"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -333,5 +335,114 @@ func TestMoveIsLiteral(t *testing.T) {
 				t.Fatalf("de %d = %d, esperado %d", tt.from, got, tt.want)
 			}
 		})
+	}
+}
+
+// Dimming a cell may not change what it says, only how loud it says it: the
+// printable text has to survive intact, and no original color may leak through.
+func TestDimKeepsTheTextAndDropsTheColors(t *testing.T) {
+	line := "\x1b[1;31mERRO\x1b[0m: build quebrou"
+	got := dim(line)
+
+	if strings.Contains(got, "\x1b[1;31m") || strings.Contains(got, "\x1b[0m") {
+		t.Errorf("dim deixou passar a cor original: %q", got)
+	}
+	if want := "ERRO: build quebrou"; sgrSequence.ReplaceAllString(got, "") != want {
+		t.Errorf("dim mudou o texto: %q, esperado %q", sgrSequence.ReplaceAllString(got, ""), want)
+	}
+	if !strings.HasPrefix(got, dimColor) {
+		t.Errorf("dim não pintou o começo da linha: %q", got)
+	}
+}
+
+// The caret is the only thing the mosaic draws on top of what an agent wrote, so
+// it has to land on the right column whatever colors the line arrived with, and
+// it has to appear even where the agent wrote nothing — which is exactly where a
+// caret waiting for a prompt sits.
+func TestPaintCaretLandsOnTheColumnTheTerminalReported(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		col  int
+		want string
+	}{
+		{
+			name: "plain line",
+			line: "abc",
+			col:  1,
+			want: "a" + caretOn + "b" + caretOff + "c",
+		},
+		{
+			name: "colors take no columns",
+			line: "\x1b[31ma\x1b[0mbc",
+			col:  1,
+			want: "\x1b[31ma\x1b[0m" + caretOn + "b" + caretOff + "c",
+		},
+		{
+			name: "past the end of the line",
+			line: "ab",
+			col:  4,
+			want: "ab  " + caretOn + " " + caretOff,
+		},
+		{
+			name: "first column of an empty line",
+			line: "",
+			col:  0,
+			want: caretOn + " " + caretOff,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := paintCaret(tt.line, tt.col); got != tt.want {
+				t.Errorf("paintCaret(%q, %d) = %q, esperado %q", tt.line, tt.col, got, tt.want)
+			}
+		})
+	}
+}
+
+// Scrolling is what lets a cell be read while its agent keeps writing, so the
+// two ends matter: it may never go past the live screen, and it has to stop
+// asking for history tmux does not keep.
+func TestScrollStopsAtTheLiveScreenAndAtTheTopOfTheHistory(t *testing.T) {
+	m := NewMosaic(nil, nil)
+	inst := makeStartedInstance(t, "worker")
+	// tmux is the one that knows how far back this session can be read, so the
+	// mock behind it is what decides where scrolling has to stop.
+	inst.SetTmuxSession(newMockTmuxSession(t, "scrollback", cmd_test.MockCmdExec{
+		RunFunc: func(*exec.Cmd) error { return nil },
+		OutputFunc: func(c *exec.Cmd) ([]byte, error) {
+			if strings.Contains(c.String(), "history_size") {
+				return []byte("500\n"), nil
+			}
+			return []byte(""), nil
+		},
+	}))
+
+	if m.ScrollOf(inst) != 0 {
+		t.Fatalf("uma célula nasce seguindo o agente, não em %d", m.ScrollOf(inst))
+	}
+	if !m.Scroll(inst, 30) || m.ScrollOf(inst) != 30 {
+		t.Errorf("subir 30 linhas deixou a célula em %d", m.ScrollOf(inst))
+	}
+	if m.Scroll(inst, -100); m.ScrollOf(inst) != 0 {
+		t.Errorf("descer além da tela ao vivo deixou a célula em %d", m.ScrollOf(inst))
+	}
+	if m.Scroll(inst, -1) {
+		t.Error("descer com a célula já ao vivo não move nada")
+	}
+
+	m.Scroll(inst, maxScrollback*2)
+	if m.ScrollOf(inst) != 500 {
+		t.Errorf("subir além do histórico deixou a célula em %d, esperado parar em 500", m.ScrollOf(inst))
+	}
+	if m.Scroll(inst, 10) {
+		t.Error("no topo do histórico não há mais nada para onde subir")
+	}
+
+	// Typing is the terminal's own way back to the bottom.
+	m.SendKeys(inst, "oi")
+	if m.ScrollOf(inst) != 0 {
+		t.Errorf("digitar não trouxe a célula de volta ao vivo: %d", m.ScrollOf(inst))
 	}
 }
