@@ -41,10 +41,10 @@ const (
 
 	// cellGap is the columns left between two cells side by side. Without it the
 	// two borders touch and read as one thick seam, which made the grid look like
-	// a table instead of a set of separate agents. Two columns instead of one
-	// because the selected cell now draws a heavy border, and a single column of
-	// air was not enough to keep it from touching its neighbour.
-	cellGap = 2
+	// a table instead of a set of separate agents. One column is enough to keep
+	// the borders apart, and every column not spent on air is a column of an
+	// agent's output.
+	cellGap = 1
 
 	// cellTitleHeight is the title block inside a cell: the name line plus a
 	// blank line separating it from the agent's own output.
