@@ -26,11 +26,14 @@ import (
 // hides half the agents defeats the point of having one.
 
 const (
-	// minCellWidth/minCellHeight are what an agent needs to still be readable.
-	// They only steer how many columns the grid opens — nothing is ever moved
-	// off screen to honour them.
-	minCellWidth  = 40
-	minCellHeight = 6
+	// minCellWidth is what an agent needs to still be readable. It only steers how
+	// many columns the grid opens — nothing is ever moved off screen to honour it.
+	minCellWidth = 40
+
+	// comfortCellHeight is where a cell stops being a peephole: enough lines to
+	// read what an agent just wrote without scrolling. It is what decides when a
+	// project's sessions stop stacking and open a second column.
+	comfortCellHeight = 16
 
 	// cellFrameWidth/cellFrameHeight are what the border around a cell costs.
 	cellFrameWidth  = 2
@@ -201,12 +204,23 @@ func paintCaret(line string, col int) string {
 	return b.String()
 }
 
-// gridRow is one line of the mosaic: cells that sit side by side and, when
-// several projects are open, all belong to the same project. A row never mixes
-// projects, which is what makes the header above it true for every cell under it.
-type gridRow struct {
+// gridCol is a project's own strip of the screen: its header and the rows of
+// its sessions underneath. Projects stand side by side rather than stacked, so
+// opening a second project narrows the screen instead of pushing the first one
+// up — which is what the eye expects when two projects are being watched at once.
+type gridCol struct {
 	group string
-	idx   []int
+	rows  []gridRow
+	// width is the content width of the whole strip, borders and gaps included,
+	// which is what the header rule is drawn across.
+	width int
+}
+
+// gridRow is one line of a column: cells that sit side by side and all belong to
+// the same project, which is what makes the header above them true for every
+// cell under it.
+type gridRow struct {
+	idx []int
 	// width is the content width of each cell in the row, border already
 	// deducted, and height the content height they share. Rows are measured one
 	// by one so a row with a single session gets the whole width instead of
@@ -263,87 +277,107 @@ func groupOrder(names []string) []int {
 	return order
 }
 
-// buildRowsFromNames is the row arithmetic itself: an empty project name means
-// no grouping, so the cells just pack.
-func buildRowsFromNames(names []string, cols int) []gridRow {
+// chunk breaks a project's sessions into rows of at most cols cells.
+func chunk(idx []int, cols int) []gridRow {
 	if cols < 1 {
 		cols = 1
 	}
 	var rows []gridRow
-	var cur gridRow
-	for _, i := range groupOrder(names) {
-		name := names[i]
-		if len(cur.idx) == cols || (len(cur.idx) > 0 && name != cur.group) {
-			rows = append(rows, cur)
-			cur = gridRow{}
+	for i := 0; i < len(idx); i += cols {
+		end := i + cols
+		if end > len(idx) {
+			end = len(idx)
 		}
-		if len(cur.idx) == 0 {
-			cur.group = name
-		}
-		cur.idx = append(cur.idx, i)
-	}
-	if len(cur.idx) > 0 {
-		rows = append(rows, cur)
+		rows = append(rows, gridRow{idx: append([]int(nil), idx[i:end]...)})
 	}
 	return rows
 }
 
-// planGrid divides width x height between the sessions and hands back the rows
-// already measured. Every session gets a cell: when they no longer fit at a
-// readable size the grid opens more columns and, failing that, the cells get
-// smaller — nothing is pushed to a second page.
-func planGrid(names []string, width, height int) []gridRow {
+// planGrid divides width x height between the sessions and hands back the
+// columns already measured. Every session gets a cell: when they no longer fit
+// at a readable size the cells get smaller — nothing is pushed to a second page.
+func planGrid(names []string, width, height int) []gridCol {
 	if len(names) == 0 || width <= 0 || height <= 0 {
 		return nil
 	}
 
-	grouped := false
-	for _, n := range names {
-		if n != "" {
-			grouped = true
-			break
+	// The projects in the order they first appear, each with its own sessions.
+	var cols []gridCol
+	at := map[string]int{}
+	for _, i := range groupOrder(names) {
+		name := names[i]
+		c, ok := at[name]
+		if !ok {
+			c = len(cols)
+			at[name] = c
+			cols = append(cols, gridCol{group: name})
 		}
+		cols[c].rows = append(cols[c].rows, gridRow{idx: []int{i}})
 	}
 
-	// The cheapest row that is still worth looking at: a legible body, its
-	// title block, its border, and the project header when there is one.
-	rowCost := minCellHeight + cellTitleHeight + cellFrameHeight
-	if grouped {
-		rowCost++
+	// Width is split between the projects, and the strips leave a column of air
+	// between them for the same reason two cells do.
+	inner := width - cellGap*(len(cols)-1)
+	if inner < len(cols) {
+		inner = len(cols)
 	}
+	baseW, extraW := inner/len(cols), inner%len(cols)
+
+	// A project header costs the line it is drawn on, once per strip and not
+	// once per row: the strip is the project.
+	colHeight := height
+	if cols[0].group != "" {
+		colHeight--
+	}
+
+	for c := range cols {
+		w := baseW
+		if c < extraW {
+			w++
+		}
+		var idx []int
+		for _, row := range cols[c].rows {
+			idx = append(idx, row.idx...)
+		}
+		cols[c].width = w
+		cols[c].rows = layoutCells(idx, w, colHeight)
+	}
+	return cols
+}
+
+// layoutCells lays one project's sessions out in a width x height box, already
+// measured. It opens as many columns inside the box as it takes to keep the
+// rows on screen and, failing that, lets the cells get smaller.
+func layoutCells(idx []int, width, height int) []gridRow {
+	// Sessions of the same project stack: a second column halves a width that was
+	// already halved by the project beside it, and two agents at 45 columns are
+	// two agents nobody can read. A column is only opened when stacking would
+	// squeeze the rows under a comfortable height — which is what makes three
+	// sessions split in two and nine split in three, while two just sit one over
+	// the other.
+	rowCost := comfortCellHeight + cellTitleHeight + cellFrameHeight
 	maxCols := width / (minCellWidth + cellFrameWidth)
 	if maxCols < 1 {
 		maxCols = 1
 	}
-	maxRows := height / rowCost
-	if maxRows < 1 {
-		maxRows = 1
+	comfortRows := height / rowCost
+	if comfortRows < 1 {
+		comfortRows = 1
 	}
 
-	cols := int(math.Ceil(math.Sqrt(float64(len(names)))))
+	cols := int(math.Ceil(float64(len(idx)) / float64(comfortRows)))
+	if cols < 1 {
+		cols = 1
+	}
 	if cols > maxCols {
 		cols = maxCols
 	}
-	rows := buildRowsFromNames(names, cols)
-	// Grouping breaks rows early, so a project that half fills a row still costs
-	// a whole one. Widen the grid until the rows fit the screen rather than
-	// spilling onto a page nobody is watching.
-	for len(rows) > maxRows && cols < maxCols {
-		cols++
-		rows = buildRowsFromNames(names, cols)
-	}
+	rows := chunk(idx, cols)
 
 	// Height: the leftover lines from the division go to the first rows instead
-	// of being left blank at the bottom of the screen.
-	// One line between rows, for the same reason cells leave a column between
-	// them. Grouping already spends a line per row on the project band, so it is
-	// only the ungrouped grid that has to buy its own separation.
-	avail := height
-	if grouped {
-		avail -= len(rows)
-	} else {
-		avail -= len(rows) - 1
-	}
+	// of being left blank at the bottom of the screen. One line between rows,
+	// for the same reason cells leave a column between them.
+	avail := height - (len(rows) - 1)
 	if avail < len(rows) {
 		avail = len(rows)
 	}
@@ -382,16 +416,30 @@ func planGrid(names []string, width, height int) []gridRow {
 	return rows
 }
 
-// rowOf returns which row holds a session index.
-func rowOf(rows []gridRow, idx int) int {
-	for r, row := range rows {
-		for _, i := range row.idx {
-			if i == idx {
-				return r
+// posOf locates a session on the grid: its project strip, its row in that strip
+// and its place in that row.
+func posOf(cols []gridCol, idx int) (col, row, cell int) {
+	for ci, c := range cols {
+		for ri, r := range c.rows {
+			for i, id := range r.idx {
+				if id == idx {
+					return ci, ri, i
+				}
 			}
 		}
 	}
-	return 0
+	return 0, 0, 0
+}
+
+func clamp(v, max int) int {
+	switch {
+	case v < 0:
+		return 0
+	case v > max:
+		return max
+	default:
+		return v
+	}
 }
 
 // Mosaic renders every session as a cell of an evenly divided screen.
@@ -601,65 +649,75 @@ func (m *Mosaic) paneOf(instance *session.Instance) *TerminalPane {
 	return nil
 }
 
-// grid is the arithmetic of one draw: the rows, split by project, already sized.
-func (m *Mosaic) grid(instances []*session.Instance) []gridRow {
+// grid is the arithmetic of one draw: one strip per project, already sized.
+func (m *Mosaic) grid(instances []*session.Instance) []gridCol {
 	return planGrid(groupNames(instances), m.width, m.height)
+}
+
+// cellsOf walks every cell of the grid with the size it was measured at.
+func cellsOf(cols []gridCol, visit func(idx, width, height int)) {
+	for _, col := range cols {
+		for _, row := range col.rows {
+			for c, i := range row.idx {
+				visit(i, row.width[c], row.height)
+			}
+		}
+	}
 }
 
 // SyncSizes gives every session's terminal the shape of its own cell. Cells no
 // longer share a size — a row with one session is wider than a row with three —
 // so each one is sized on its own.
 func (m *Mosaic) SyncSizes(instances []*session.Instance) {
-	for _, row := range m.grid(instances) {
-		for c, i := range row.idx {
-			inst := instances[i]
-			if inst == nil || !inst.Started() || inst.Paused() {
-				continue
-			}
-			width, height := row.width[c], row.height-cellTitleHeight
-			if width < 1 || height < 1 {
-				continue
-			}
-			if err := inst.SetPreviewSize(width, height); err != nil {
-				// A session that refuses the resize still draws, just at the old
-				// shape until the next one.
-				continue
-			}
+	cellsOf(m.grid(instances), func(i, width, height int) {
+		inst := instances[i]
+		if inst == nil || !inst.Started() || inst.Paused() {
+			return
 		}
-	}
+		height -= cellTitleHeight
+		if width < 1 || height < 1 {
+			return
+		}
+		// A session that refuses the resize still draws, just at the old shape
+		// until the next one.
+		_ = inst.SetPreviewSize(width, height)
+	})
 }
 
 // Move is arrow navigation as the eye reads it: left goes to the cell on the
 // left, down to the cell below. A linear next/previous would jump across the
 // screen and look like the selection teleported.
 func (m *Mosaic) Move(instances []*session.Instance, selectedIdx, dCol, dRow int) int {
-	rows := m.grid(instances)
-	if len(rows) == 0 {
+	return moveOn(m.grid(instances), selectedIdx, dCol, dRow)
+}
+
+// moveOn is the step itself, on a grid already measured.
+func moveOn(cols []gridCol, selectedIdx, dCol, dRow int) int {
+	if len(cols) == 0 {
 		return selectedIdx
 	}
-	r := rowOf(rows, selectedIdx)
-	c := 0
-	for i, idx := range rows[r].idx {
-		if idx == selectedIdx {
-			c = i
+	ci, ri, c := posOf(cols, selectedIdx)
+
+	if dRow != 0 {
+		ri = clamp(ri+dRow, len(cols[ci].rows)-1)
+	}
+	if dCol != 0 {
+		// Sideways is first a step inside the row; only at its edge does it cross
+		// into the neighbouring project, landing on the cell nearest the seam.
+		if next := c + dCol; next >= 0 && next < len(cols[ci].rows[ri].idx) {
+			c = next
+		} else if nc := clamp(ci+dCol, len(cols)-1); nc != ci {
+			ci = nc
+			ri = clamp(ri, len(cols[ci].rows)-1)
+			if dCol > 0 {
+				c = 0
+			} else {
+				c = len(cols[ci].rows[ri].idx) - 1
+			}
 		}
 	}
-
-	r += dRow
-	if r < 0 {
-		r = 0
-	}
-	if r > len(rows)-1 {
-		r = len(rows) - 1
-	}
-	c += dCol
-	if c < 0 {
-		c = 0
-	}
-	if c > len(rows[r].idx)-1 {
-		c = len(rows[r].idx) - 1
-	}
-	return rows[r].idx[c]
+	c = clamp(c, len(cols[ci].rows[ri].idx)-1)
+	return cols[ci].rows[ri].idx[c]
 }
 
 // UpdateContent re-reads every session on screen. The focused cell is read every
@@ -690,23 +748,21 @@ func (m *Mosaic) UpdateContent(instances []*session.Instance, selectedIdx, tick 
 	}
 	var own []ownRead
 
-	for _, row := range m.grid(instances) {
-		for c, i := range row.idx {
-			inst := instances[i]
-			if inst == nil || !inst.Started() || inst.Paused() {
-				continue
-			}
-			if inst != m.focused && !slowRound {
-				continue
-			}
-			offset := m.scroll[inst.ID()]
-			if m.paneOf(inst) == nil && offset == 0 {
-				agents = append(agents, inst)
-				continue
-			}
-			own = append(own, ownRead{inst, row.width[c], row.height - cellTitleHeight, offset})
+	cellsOf(m.grid(instances), func(i, width, height int) {
+		inst := instances[i]
+		if inst == nil || !inst.Started() || inst.Paused() {
+			return
 		}
-	}
+		if inst != m.focused && !slowRound {
+			return
+		}
+		offset := m.scroll[inst.ID()]
+		if m.paneOf(inst) == nil && offset == 0 {
+			agents = append(agents, inst)
+			return
+		}
+		own = append(own, ownRead{inst, width, height - cellTitleHeight, offset})
+	})
 
 	for id, content := range session.CapturePanes(agents) {
 		m.content[contentKey(id, PreviewTab)] = content
@@ -799,37 +855,39 @@ func (m *Mosaic) String(instances []*session.Instance, selectedIdx int) string {
 			Render("Nenhum agente rodando ainda. Pressione 'n' para criar uma sessão.")
 	}
 
-	rows := m.grid(instances)
+	cols := m.grid(instances)
 
-	// The project header repeats only when the project changes, exactly like the
-	// list does it. Rows that continue the same project get a blank line so the
-	// grid stays aligned whatever the headers do.
-	var lines []string
-	drawn := ""
-	for r, row := range rows {
-		switch {
-		case row.group == "":
+	// One strip per project, side by side, each headed by its own name. Within a
+	// strip the rows are separated by a blank line, the same air two cells leave
+	// between them.
+	var strips []string
+	for ci, col := range cols {
+		var lines []string
+		if col.group != "" {
+			lines = append(lines, m.groupHeader(col.group, col.width))
+		}
+		for r, row := range col.rows {
 			if r > 0 {
 				lines = append(lines, "")
 			}
-		case row.group != drawn:
-			lines = append(lines, m.groupHeader(row.group))
-			drawn = row.group
-		default:
-			lines = append(lines, "")
-		}
-		var cells []string
-		for c, i := range row.idx {
-			cell := m.renderCell(instances[i], i+1, row.width[c], row.height, i == selectedIdx)
-			if c < len(row.idx)-1 {
-				cell = lipgloss.NewStyle().MarginRight(cellGap).Render(cell)
+			var cells []string
+			for c, i := range row.idx {
+				cell := m.renderCell(instances[i], i+1, row.width[c], row.height, i == selectedIdx)
+				if c < len(row.idx)-1 {
+					cell = lipgloss.NewStyle().MarginRight(cellGap).Render(cell)
+				}
+				cells = append(cells, cell)
 			}
-			cells = append(cells, cell)
+			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
 		}
-		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
+		strip := lipgloss.JoinVertical(lipgloss.Left, lines...)
+		if ci < len(cols)-1 {
+			strip = lipgloss.NewStyle().MarginRight(cellGap).Render(strip)
+		}
+		strips = append(strips, strip)
 	}
 
-	grid := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	grid := lipgloss.JoinHorizontal(lipgloss.Top, strips...)
 	if !m.Focused() {
 		// The menu under the mosaic already lists the keys; a second line
 		// repeating them said the same thing twice, in two wordings.
@@ -838,15 +896,15 @@ func (m *Mosaic) String(instances []*session.Instance, selectedIdx int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, grid, m.footer())
 }
 
-// groupHeader draws the band over a project's rows: the name in the project's
-// color and a rule that carries it to the edge of the grid, so the header reads
-// as belonging to the cells beneath it rather than floating over the first one.
-func (m *Mosaic) groupHeader(name string) string {
+// groupHeader draws the band over a project's strip: the name in the project's
+// color and a rule that carries it to the edge of that strip, so the header
+// reads as belonging to the cells beneath it rather than to the whole screen.
+func (m *Mosaic) groupHeader(name string, width int) string {
 	color := groupColor(name)
 	label := mosaicGroupNameStyle.Foreground(color).Render(strings.ToUpper(name) + " ")
-	rule := m.width - lipgloss.Width(label)
+	rule := width - lipgloss.Width(label)
 	if rule < 1 {
-		return lipgloss.NewStyle().MaxWidth(m.width).Render(label)
+		return lipgloss.NewStyle().MaxWidth(width).Render(label)
 	}
 	return label + mosaicGroupRuleStyle.Foreground(color).Render(strings.Repeat("─", rule))
 }

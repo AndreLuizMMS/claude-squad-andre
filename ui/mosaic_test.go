@@ -22,13 +22,11 @@ func namesFor(n int) []string {
 // gap on the right — and every session has to be on it.
 func TestPlanGridFillsTheScreen(t *testing.T) {
 	tests := []struct {
-		name             string
-		names            []string
-		width, height    int
-		wantRows         int
-		wantCellsPerRow  []int
-		grouped          bool
-		wantHeaderPerRow bool
+		name            string
+		names           []string
+		width, height   int
+		wantRows        int
+		wantCellsPerRow []int
 	}{
 		{
 			name:  "quatro sessões dividem a tela em quatro",
@@ -46,22 +44,24 @@ func TestPlanGridFillsTheScreen(t *testing.T) {
 			wantRows: 1, wantCellsPerRow: []int{1},
 		},
 		{
+			name:  "duas sessões ficam uma sobre a outra",
+			names: namesFor(2), width: 200, height: 50,
+			wantRows: 2, wantCellsPerRow: []int{1, 1},
+		},
+		{
 			name:  "nove sessões cabem em três por três",
 			names: namesFor(9), width: 240, height: 60,
 			wantRows: 3, wantCellsPerRow: []int{3, 3, 3},
-		},
-		{
-			name:  "projetos diferentes não misturam linhas",
-			names: []string{"alpha", "alpha", "alpha", "beta"},
-			width: 200, height: 50,
-			wantRows: 3, wantCellsPerRow: []int{2, 1, 1},
-			grouped: true, wantHeaderPerRow: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows := planGrid(tt.names, tt.width, tt.height)
+			cols := planGrid(tt.names, tt.width, tt.height)
+			if len(cols) != 1 {
+				t.Fatalf("colunas = %d, esperado 1 (um projeto só)", len(cols))
+			}
+			rows := cols[0].rows
 			if len(rows) != tt.wantRows {
 				t.Fatalf("linhas = %d, esperado %d", len(rows), tt.wantRows)
 			}
@@ -81,11 +81,8 @@ func TestPlanGridFillsTheScreen(t *testing.T) {
 					t.Fatalf("linha %d ocupa %d colunas de %d", r, w, tt.width)
 				}
 				used += row.height + cellFrameHeight
-				// Grouping spends a line per row on the project band; without it
-				// the rows still leave one line between them.
-				if tt.wantHeaderPerRow {
-					used++
-				} else if r > 0 {
+				// The rows still leave one line between them.
+				if r > 0 {
 					used++
 				}
 			}
@@ -98,6 +95,77 @@ func TestPlanGridFillsTheScreen(t *testing.T) {
 	}
 }
 
+// Two projects open means two strips side by side: the second project narrows
+// the first instead of pushing it up the screen.
+func TestPlanGridPutsProjectsSideBySide(t *testing.T) {
+	names := []string{"alpha", "alpha", "alpha", "beta"}
+	width, height := 200, 50
+	cols := planGrid(names, width, height)
+
+	if len(cols) != 2 {
+		t.Fatalf("colunas = %d, esperado 2 (alpha e beta)", len(cols))
+	}
+	if cols[0].group != "alpha" || cols[1].group != "beta" {
+		t.Fatalf("projetos = %q e %q", cols[0].group, cols[1].group)
+	}
+
+	// The two strips and the air between them cover the screen.
+	if total := cols[0].width + cols[1].width + cellGap; total != width {
+		t.Fatalf("as colunas ocupam %d de %d", total, width)
+	}
+
+	for _, col := range cols {
+		// The project header costs one line, once for the strip.
+		used := 1
+		for r, row := range col.rows {
+			for _, i := range row.idx {
+				if names[i] != col.group {
+					t.Fatalf("célula %d (%s) na coluna de %s", i, names[i], col.group)
+				}
+			}
+			w := cellGap * (len(row.width) - 1)
+			for _, cw := range row.width {
+				w += cw + cellFrameWidth
+			}
+			if w != col.width {
+				t.Fatalf("linha %d de %s ocupa %d de %d", r, col.group, w, col.width)
+			}
+			used += row.height + cellFrameHeight
+			if r > 0 {
+				used++
+			}
+		}
+		if used != height {
+			t.Fatalf("coluna %s ocupa %d linhas de %d", col.group, used, height)
+		}
+	}
+}
+
+// A project opened again later belongs to the strip it already has: two strips
+// with the same name read as two different projects.
+func TestPlanGridMergesAProjectOpenedAgain(t *testing.T) {
+	names := []string{"cortz", "squad", "cortz", "cortz"}
+	cols := planGrid(names, 200, 50)
+
+	if len(cols) != 2 || cols[0].group != "cortz" || cols[1].group != "squad" {
+		t.Fatalf("colunas = %+v, esperado [cortz squad]", cols)
+	}
+	seen := map[int]bool{}
+	for _, col := range cols {
+		for _, row := range col.rows {
+			for _, i := range row.idx {
+				if names[i] != col.group {
+					t.Fatalf("célula %d (%s) na coluna de %s", i, names[i], col.group)
+				}
+				seen[i] = true
+			}
+		}
+	}
+	if len(seen) != len(names) {
+		t.Fatalf("células desenhadas = %d, esperado %d", len(seen), len(names))
+	}
+}
+
 // The mosaic does not paginate: a screen crowded with projects shrinks the cells
 // instead of hiding half the agents behind a page nobody knows to turn.
 func TestPlanGridNeverHidesASession(t *testing.T) {
@@ -107,16 +175,13 @@ func TestPlanGridNeverHidesASession(t *testing.T) {
 	}
 
 	for _, size := range [][2]int{{200, 50}, {120, 30}, {60, 12}} {
-		rows := planGrid(names, size[0], size[1])
 		seen := make(map[int]bool)
-		for _, row := range rows {
-			for _, i := range row.idx {
-				if seen[i] {
-					t.Fatalf("sessão %d desenhada duas vezes em %dx%d", i, size[0], size[1])
-				}
-				seen[i] = true
+		cellsOf(planGrid(names, size[0], size[1]), func(i, _, _ int) {
+			if seen[i] {
+				t.Fatalf("sessão %d desenhada duas vezes em %dx%d", i, size[0], size[1])
 			}
-		}
+			seen[i] = true
+		})
 		if len(seen) != len(names) {
 			t.Fatalf("em %dx%d apareceram %d sessões de %d", size[0], size[1], len(seen), len(names))
 		}
@@ -126,19 +191,13 @@ func TestPlanGridNeverHidesASession(t *testing.T) {
 // A terminal too small for the legibility floor still has to draw something —
 // cramped cells beat a blank screen.
 func TestPlanGridTinyTerminal(t *testing.T) {
-	rows := planGrid(namesFor(4), 30, 8)
 	total := 0
-	for _, row := range rows {
-		total += len(row.idx)
-		if row.height < 1 {
-			t.Fatalf("linha degenerada: altura %d", row.height)
+	cellsOf(planGrid(namesFor(4), 30, 8), func(_, width, height int) {
+		total++
+		if height < 1 || width < 1 {
+			t.Fatalf("célula degenerada: %dx%d", width, height)
 		}
-		for _, w := range row.width {
-			if w < 1 {
-				t.Fatalf("célula degenerada: largura %d", w)
-			}
-		}
-	}
+	})
 	if total != 4 {
 		t.Fatalf("sessões desenhadas = %d, esperado 4", total)
 	}
@@ -212,64 +271,15 @@ func TestCyclePanelIsPerCell(t *testing.T) {
 	}
 }
 
-// The mosaic splits projects the same way the list does: a row never mixes two
-// projects, so the header above it is true for every cell under it.
-func TestBuildRowsBreaksOnProjectChange(t *testing.T) {
-	names := []string{"alpha", "alpha", "alpha", "beta"}
-	rows := buildRowsFromNames(names, 2)
-
-	if len(rows) != 3 {
-		t.Fatalf("linhas = %d, esperado 3 (alpha 2, alpha 1, beta 1)", len(rows))
+// One project means no strips at all, exactly like the list — otherwise the
+// grid would waste a line on a header that separates nothing.
+func TestPlanGridPacksWhenNotGrouped(t *testing.T) {
+	cols := planGrid([]string{"", "", "", ""}, 200, 50)
+	if len(cols) != 1 || cols[0].group != "" {
+		t.Fatalf("colunas = %+v, esperado uma sem cabeçalho", cols)
 	}
-	for _, row := range rows {
-		first := names[row.idx[0]]
-		for _, i := range row.idx {
-			if names[i] != first {
-				t.Fatalf("linha misturou projetos: %v", row.idx)
-			}
-		}
-	}
-	if rows[2].group != "beta" {
-		t.Fatalf("última linha = %q, esperado beta", rows[2].group)
-	}
-}
-
-// A project opened again later belongs under the header it already has: two
-// sections with the same name read as two different projects.
-func TestBuildRowsMergesAProjectOpenedAgain(t *testing.T) {
-	names := []string{"cortz", "squad", "cortz", "cortz"}
-	rows := buildRowsFromNames(names, 2)
-
-	var headers []string
-	for _, row := range rows {
-		if len(headers) == 0 || headers[len(headers)-1] != row.group {
-			headers = append(headers, row.group)
-		}
-	}
-	if len(headers) != 2 || headers[0] != "cortz" || headers[1] != "squad" {
-		t.Fatalf("cabeçalhos = %v, esperado [cortz squad]", headers)
-	}
-
-	seen := map[int]bool{}
-	for _, row := range rows {
-		for _, i := range row.idx {
-			if names[i] != row.group {
-				t.Fatalf("célula %d (%s) na linha de %s", i, names[i], row.group)
-			}
-			seen[i] = true
-		}
-	}
-	if len(seen) != len(names) {
-		t.Fatalf("células desenhadas = %d, esperado %d", len(seen), len(names))
-	}
-}
-
-// One project means no grouping at all, exactly like the list — otherwise every
-// row would waste a line on a header that separates nothing.
-func TestBuildRowsPacksWhenNotGrouped(t *testing.T) {
-	rows := buildRowsFromNames([]string{"", "", "", ""}, 2)
-	if len(rows) != 2 {
-		t.Fatalf("linhas = %d, esperado 2", len(rows))
+	if len(cols[0].rows) != 2 {
+		t.Fatalf("linhas = %d, esperado 2", len(cols[0].rows))
 	}
 }
 
@@ -332,6 +342,34 @@ func TestMoveIsLiteral(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := m.Move(instances, tt.from, tt.dCol, tt.dRow); got != tt.want {
+				t.Fatalf("de %d = %d, esperado %d", tt.from, got, tt.want)
+			}
+		})
+	}
+}
+
+// With the projects side by side, right at the edge of a strip crosses into the
+// next project instead of stopping — the strips are neighbours on screen, so
+// they have to be neighbours under the arrows too.
+func TestMoveCrossesBetweenProjects(t *testing.T) {
+	// alpha com três sessões (2 em cima, 1 embaixo) ao lado de beta com uma.
+	cols := planGrid([]string{"alpha", "alpha", "alpha", "beta"}, 200, 50)
+
+	tests := []struct {
+		name             string
+		from, dCol, dRow int
+		want             int
+	}{
+		{"dentro da coluna", 0, 1, 0, 1},
+		{"borda direita entra no beta", 1, 1, 0, 3},
+		{"do beta volta para o alpha", 3, -1, 0, 1},
+		{"desce dentro do alpha", 0, 0, 1, 2},
+		{"beta não tem linha de baixo", 3, 0, 1, 3},
+		{"borda esquerda segura", 0, -1, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := moveOn(cols, tt.from, tt.dCol, tt.dRow); got != tt.want {
 				t.Fatalf("de %d = %d, esperado %d", tt.from, got, tt.want)
 			}
 		})
@@ -444,5 +482,25 @@ func TestScrollStopsAtTheLiveScreenAndAtTheTopOfTheHistory(t *testing.T) {
 	m.SendKeys(inst, "oi")
 	if m.ScrollOf(inst) != 0 {
 		t.Errorf("digitar não trouxe a célula de volta ao vivo: %d", m.ScrollOf(inst))
+	}
+}
+
+// The screenshot case: two sessions of the same project, in a strip already
+// narrowed by the project beside them, stack instead of splitting that strip in
+// two 45-column cells.
+func TestPlanGridStacksSessionsInsideANarrowStrip(t *testing.T) {
+	cols := planGrid([]string{"doxar", "regula", "regula"}, 190, 58)
+
+	if len(cols) != 2 {
+		t.Fatalf("colunas = %d, esperado 2", len(cols))
+	}
+	regula := cols[1]
+	if len(regula.rows) != 2 {
+		t.Fatalf("regula com %d linhas, esperado 2 (uma sobre a outra)", len(regula.rows))
+	}
+	for r, row := range regula.rows {
+		if len(row.idx) != 1 {
+			t.Fatalf("linha %d de regula com %d células, esperado 1", r, len(row.idx))
+		}
 	}
 }
