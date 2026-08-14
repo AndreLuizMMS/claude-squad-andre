@@ -141,6 +141,75 @@ func TestPlanGridPutsProjectsSideBySide(t *testing.T) {
 	}
 }
 
+// Four projects on one line gave each a sliver too narrow to read. They wrap
+// into a 2x2 instead, which buys every cell twice the width for its text.
+func TestPlanGridWrapsProjectsIntoBands(t *testing.T) {
+	names := []string{"doxar", "squad", "regula", "claude"}
+	width, height := 240, 60
+	cols := planGrid(names, width, height)
+
+	if len(cols) != 4 {
+		t.Fatalf("colunas = %d, esperado 4", len(cols))
+	}
+	want := []int{0, 0, 1, 1}
+	for i, col := range cols {
+		if col.band != want[i] {
+			t.Fatalf("projeto %s na banda %d, esperado %d", col.group, col.band, want[i])
+		}
+	}
+
+	// Each band covers the full width: two strips and the air between them.
+	for b := 0; b < 2; b++ {
+		total := cellGap
+		for _, col := range cols {
+			if col.band == b {
+				total += col.width
+			}
+		}
+		if total != width {
+			t.Fatalf("banda %d ocupa %d de %d", b, total, width)
+		}
+	}
+
+	// A strip is now wide enough for a readable cell, which is the whole point.
+	if cols[0].width < minStripWidth {
+		t.Fatalf("faixa de %d colunas, abaixo do mínimo %d", cols[0].width, minStripWidth)
+	}
+
+	// The two bands and the blank line between them cover the screen, the
+	// leftover line going to the first band.
+	avail := height - 1
+	for _, col := range cols {
+		used := 1 // the project header
+		for r, row := range col.rows {
+			used += row.height + cellFrameHeight
+			if r > 0 {
+				used++
+			}
+		}
+		bandHeight := avail / 2
+		if col.band < avail%2 {
+			bandHeight++
+		}
+		if used != bandHeight {
+			t.Fatalf("coluna %s ocupa %d linhas de %d", col.group, used, bandHeight)
+		}
+	}
+}
+
+// A screen too short for two bands keeps the projects on one line: a crowded
+// line beats a band nobody can read.
+func TestPlanGridKeepsOneBandWhenTooShort(t *testing.T) {
+	names := []string{"doxar", "squad", "regula", "claude"}
+	cols := planGrid(names, 240, 24)
+
+	for _, col := range cols {
+		if col.band != 0 {
+			t.Fatalf("projeto %s na banda %d numa tela baixa", col.group, col.band)
+		}
+	}
+}
+
 // A project opened again later belongs to the strip it already has: two strips
 // with the same name read as two different projects.
 func TestPlanGridMergesAProjectOpenedAgain(t *testing.T) {

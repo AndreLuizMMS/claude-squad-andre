@@ -214,6 +214,11 @@ type gridCol struct {
 	// width is the content width of the whole strip, borders and gaps included,
 	// which is what the header rule is drawn across.
 	width int
+	// band is which row of strips this project sits in. Strips only stand side
+	// by side until they get too narrow to read; past that they wrap onto a
+	// second band, which is what turns four projects into a 2x2 instead of four
+	// slivers.
+	band int
 }
 
 // gridRow is one line of a column: cells that sit side by side and all belong to
@@ -315,34 +320,95 @@ func planGrid(names []string, width, height int) []gridCol {
 		cols[c].rows = append(cols[c].rows, gridRow{idx: []int{i}})
 	}
 
-	// Width is split between the projects, and the strips leave a column of air
-	// between them for the same reason two cells do.
-	inner := width - cellGap*(len(cols)-1)
-	if inner < len(cols) {
-		inner = len(cols)
-	}
-	baseW, extraW := inner/len(cols), inner%len(cols)
+	// The projects are laid out in bands rather than all on one line: past a
+	// handful of projects a single line of strips gives each one a sliver too
+	// narrow to read, and the screen is better spent on a second band.
+	perBand, bands := planBands(len(cols), width, height)
 
-	// A project header costs the line it is drawn on, once per strip and not
-	// once per row: the strip is the project.
-	colHeight := height
-	if cols[0].group != "" {
-		colHeight--
+	// Height is split between the bands, one blank line between them, leftover
+	// lines to the first bands — the same division layoutCells does for rows.
+	availH := height - (bands - 1)
+	if availH < bands {
+		availH = bands
 	}
+	baseH, extraH := availH/bands, availH%bands
 
-	for c := range cols {
-		w := baseW
-		if c < extraW {
-			w++
+	for b := 0; b < bands; b++ {
+		first := b * perBand
+		last := first + perBand
+		if last > len(cols) {
+			last = len(cols)
 		}
-		var idx []int
-		for _, row := range cols[c].rows {
-			idx = append(idx, row.idx...)
+		if last <= first {
+			break
 		}
-		cols[c].width = w
-		cols[c].rows = layoutCells(idx, w, colHeight)
+		n := last - first
+
+		// Width is split between the projects of this band alone, and the strips
+		// leave a column of air between them for the same reason two cells do.
+		inner := width - cellGap*(n-1)
+		if inner < n {
+			inner = n
+		}
+		baseW, extraW := inner/n, inner%n
+
+		bandHeight := baseH
+		if b < extraH {
+			bandHeight++
+		}
+
+		for c := first; c < last; c++ {
+			w := baseW
+			if c-first < extraW {
+				w++
+			}
+			// A project header costs the line it is drawn on, once per strip and
+			// not once per row: the strip is the project.
+			colHeight := bandHeight
+			if cols[c].group != "" {
+				colHeight--
+			}
+			var idx []int
+			for _, row := range cols[c].rows {
+				idx = append(idx, row.idx...)
+			}
+			cols[c].band = b
+			cols[c].width = w
+			cols[c].rows = layoutCells(idx, w, colHeight)
+		}
 	}
 	return cols
+}
+
+// minStripWidth is the narrowest a project strip is allowed to get before the
+// projects start wrapping onto a second band: two readable cells side by side.
+// A strip thinner than that cannot hold even one comfortable cell plus the air
+// around it, which is when four projects on one line stop being legible.
+const minStripWidth = 2*minCellWidth + cellFrameWidth
+
+// minBandHeight is what a band needs for its cells to be worth reading: one
+// comfortable cell plus its title, border and the project header above it.
+const minBandHeight = comfortCellHeight + cellTitleHeight + cellFrameHeight + 1
+
+// planBands decides how the project strips are arranged: how many stand side
+// by side, and how many lines of them. Strips stay on one line while they are
+// wide enough to read, and wrap only when the screen cannot hold them —
+// unless wrapping would squeeze the bands under a readable height, in which
+// case a crowded line beats a band nobody can read.
+func planBands(n, width, height int) (perBand, bands int) {
+	perBand = width / minStripWidth
+	if perBand < 1 {
+		perBand = 1
+	}
+	if perBand > n {
+		perBand = n
+	}
+	bands = int(math.Ceil(float64(n) / float64(perBand)))
+	for bands > 1 && height/bands < minBandHeight && perBand < n {
+		perBand++
+		bands = int(math.Ceil(float64(n) / float64(perBand)))
+	}
+	return perBand, bands
 }
 
 // layoutCells lays one project's sessions out in a width x height box, already
@@ -533,6 +599,19 @@ func (m *Mosaic) panelOf(instance *session.Instance) int {
 	return m.panel[instance.ID()]
 }
 
+// PanelOf is the exported form of panelOf, for callers outside the package
+// that need to branch on which panel a cell is showing (e.g. ctrl-r asking
+// the right agent to rename its chat).
+func (m *Mosaic) PanelOf(instance *session.Instance) int {
+	return m.panelOf(instance)
+}
+
+// SendPromptToAgent types a prompt into a cell's Cursor CLI pane and taps
+// enter — used to ask it to rename its own chat.
+func (m *Mosaic) SendPromptToAgent(instance *session.Instance, prompt string) error {
+	return m.agent.SendPromptToInstance(instance, prompt)
+}
+
 // CyclePanel moves one cell to the next panel — agent, Cursor, shell — the same
 // order the tabs follow in the list view.
 func (m *Mosaic) CyclePanel(instance *session.Instance) {
@@ -599,19 +678,6 @@ func (m *Mosaic) Scroll(instance *session.Instance, lines int) bool {
 // fails answers zero, which pins the cell to the live screen rather than letting
 // it scroll into a window nobody can prove exists.
 func (m *Mosaic) historyOf(instance *session.Instance) int {
-// PanelOf is the exported form of panelOf, for callers outside the package
-// that need to branch on which panel a cell is showing (e.g. ctrl-r asking
-// the right agent to rename its chat).
-func (m *Mosaic) PanelOf(instance *session.Instance) int {
-	return m.panelOf(instance)
-}
-
-// SendPromptToAgent types a prompt into a cell's Cursor CLI pane and taps
-// enter — used to ask it to rename its own chat.
-func (m *Mosaic) SendPromptToAgent(instance *session.Instance, prompt string) error {
-	return m.agent.SendPromptToInstance(instance, prompt)
-}
-
 	var n int
 	var err error
 	if pane := m.paneOf(instance); pane != nil {
@@ -660,6 +726,25 @@ func (m *Mosaic) paneOf(instance *session.Instance) *TerminalPane {
 		return m.terminal
 	}
 	return nil
+}
+
+// IsOnTerminalPanel reports whether a cell is showing a shell (Cursor or Bash)
+// rather than the session's own agent — the mosaic equivalent of
+// TabbedWindow.IsInTerminalTab, so 'o' can open whichever panel the cell is
+// actually on instead of always the agent.
+func (m *Mosaic) IsOnTerminalPanel(instance *session.Instance) bool {
+	return m.paneOf(instance) != nil
+}
+
+// AttachPanel attaches to the tmux session behind the shell a cell is
+// showing. It mirrors TabbedWindow.AttachTerminal so 'o' opens the same panel
+// full screen in mosaic mode that the cell was already showing.
+func (m *Mosaic) AttachPanel(instance *session.Instance) (chan struct{}, error) {
+	pane := m.paneOf(instance)
+	if pane == nil {
+		return nil, fmt.Errorf("no terminal session to attach to")
+	}
+	return pane.Attach()
 }
 
 // grid is the arithmetic of one draw: one strip per project, already sized.
@@ -741,25 +826,6 @@ func (m *Mosaic) UpdateContent(instances []*session.Instance, selectedIdx, tick 
 	// A session that paused, crashed or was killed cannot take keystrokes, and
 	// holding the keyboard for it would swallow them silently.
 	if m.focused != nil && (!m.focused.Started() || m.focused.Paused() ||
-// IsOnTerminalPanel reports whether a cell is showing a shell (Cursor or Bash)
-// rather than the session's own agent — the mosaic equivalent of
-// TabbedWindow.IsInTerminalTab, so 'o' can open whichever panel the cell is
-// actually on instead of always the agent.
-func (m *Mosaic) IsOnTerminalPanel(instance *session.Instance) bool {
-	return m.paneOf(instance) != nil
-}
-
-// AttachPanel attaches to the tmux session behind the shell a cell is
-// showing. It mirrors TabbedWindow.AttachTerminal so 'o' opens the same panel
-// full screen in mosaic mode that the cell was already showing.
-func (m *Mosaic) AttachPanel(instance *session.Instance) (chan struct{}, error) {
-	pane := m.paneOf(instance)
-	if pane == nil {
-		return nil, fmt.Errorf("no terminal session to attach to")
-	}
-	return pane.Attach()
-}
-
 		(m.focused.HasExited() && m.panelOf(m.focused) == PreviewTab)) {
 		m.focused = nil
 	}
@@ -889,9 +955,12 @@ func (m *Mosaic) String(instances []*session.Instance, selectedIdx int) string {
 
 	cols := m.grid(instances)
 
-	// One strip per project, side by side, each headed by its own name. Within a
-	// strip the rows are separated by a blank line, the same air two cells leave
-	// between them.
+	// One strip per project, each headed by its own name. Strips stand side by
+	// side within a band, and the bands stack — which is what keeps a fourth
+	// project from making every strip too narrow to read. Within a strip the
+	// rows are separated by a blank line, the same air two cells leave between
+	// them.
+	var bands []string
 	var strips []string
 	for ci, col := range cols {
 		var lines []string
@@ -913,13 +982,23 @@ func (m *Mosaic) String(instances []*session.Instance, selectedIdx int) string {
 			lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, cells...))
 		}
 		strip := lipgloss.JoinVertical(lipgloss.Left, lines...)
-		if ci < len(cols)-1 {
+		// The band closes at the last strip, or at the one before a strip that
+		// belongs to the next band.
+		last := ci == len(cols)-1 || cols[ci+1].band != col.band
+		if !last {
 			strip = lipgloss.NewStyle().MarginRight(cellGap).Render(strip)
 		}
 		strips = append(strips, strip)
+		if last {
+			if len(bands) > 0 {
+				bands = append(bands, "")
+			}
+			bands = append(bands, lipgloss.JoinHorizontal(lipgloss.Top, strips...))
+			strips = nil
+		}
 	}
 
-	grid := lipgloss.JoinHorizontal(lipgloss.Top, strips...)
+	grid := lipgloss.JoinVertical(lipgloss.Left, bands...)
 	if !m.Focused() {
 		// The menu under the mosaic already lists the keys; a second line
 		// repeating them said the same thing twice, in two wordings.
