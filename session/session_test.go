@@ -573,6 +573,48 @@ func TestRenameWaitsForTheAnswerItAskedFor(t *testing.T) {
 	assert.Equal(t, "", inst.PollAgentTitle())
 }
 
+// TestCursorRenameWaitsForTheAnswerItAskedFor is the Cursor CLI counterpart:
+// same off-by-one/sibling-session guarantee, but reading Cursor's own
+// meta.json chats instead of Claude Code's transcripts.
+func TestCursorRenameWaitsForTheAnswerItAskedFor(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	workDir := filepath.Join(home, "work")
+	require.NoError(t, os.MkdirAll(workDir, 0755))
+	chatsDir := filepath.Join(home, ".cursor", "chats", "somehash")
+
+	// A sibling session in the same directory, already named, and this
+	// session's own chat still carrying the name of a previous ctrl+r.
+	sibling := filepath.Join(chatsDir, "chat-1")
+	require.NoError(t, os.MkdirAll(sibling, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(sibling, "meta.json"),
+		[]byte(`{"cwd":"`+workDir+`","title":"nome-da-sessao-1"}`), 0644))
+	own := filepath.Join(chatsDir, "chat-2")
+	require.NoError(t, os.MkdirAll(own, 0755))
+	ownMeta := filepath.Join(own, "meta.json")
+	require.NoError(t, os.WriteFile(ownMeta, []byte(`{"cwd":"`+workDir+`","title":"nome-antigo"}`), 0644))
+
+	inst, err := NewInstance(InstanceOptions{Title: "sessao-2", Path: workDir, Program: "bash"})
+	require.NoError(t, err)
+	require.NoError(t, inst.Start(true))
+	defer func() { _ = inst.Kill() }()
+
+	// Nothing is waiting on a name until ctrl+r asks for one.
+	assert.Equal(t, "", inst.PollAgentTitle())
+
+	inst.WatchCursorTitle()
+	assert.Equal(t, "", inst.PollAgentTitle(),
+		"neither the sibling's name nor its own previous one counts as the answer")
+
+	// Cursor answers.
+	require.NoError(t, os.WriteFile(ownMeta, []byte(`{"cwd":"`+workDir+`","title":"nome-novo"}`), 0644))
+	assert.Equal(t, "nome-novo", inst.PollAgentTitle())
+
+	// The answer is taken once: the wait is over until the next ctrl+r.
+	assert.Equal(t, "", inst.PollAgentTitle())
+}
+
 // TestCapturePanesReadsEachSessionsOwnScreen covers the batched read, which is
 // how a screenful of agents is observed with one tmux process instead of one
 // per session. Two things can go wrong and both are silent: the batch is cut

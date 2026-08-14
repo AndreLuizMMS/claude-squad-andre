@@ -741,9 +741,32 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyRenameAgent:
 		// Every press asks the agent to name itself again, named or not, and the
 		// session then waits for that answer instead of copying the name already
-		// on file — which was the previous answer, or a sibling session's.
+		// on file — which was the previous answer, or a sibling session's. Which
+		// agent gets asked depends on which panel is on screen: the Cursor CLI
+		// pane gets its own '/rename-chat', everything else asks Claude Code.
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Status == session.Loading {
+			return m, nil
+		}
+		onCursorPanel := false
+		switch m.viewMode {
+		case viewList:
+			onCursorPanel = m.tabbedWindow.IsInAgentTab()
+		case viewMosaic:
+			onCursorPanel = m.mosaic.PanelOf(selected) == ui.AgentTab
+		}
+		if onCursorPanel {
+			selected.WatchCursorTitle()
+			var err error
+			if m.viewMode == viewList {
+				err = m.tabbedWindow.SendPromptToAgent(selected, "/rename-chat")
+			} else {
+				err = m.mosaic.SendPromptToAgent(selected, "/rename-chat")
+			}
+			if err != nil {
+				selected.CancelTitleWatch()
+				return m, m.handleError(err)
+			}
 			return m, nil
 		}
 		if err := selected.RequestAgentTitle(); err != nil {
@@ -944,6 +967,18 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				m.syncSessionSizes()
 			})
 		}
+		if m.viewMode == viewMosaic && m.mosaic.IsOnTerminalPanel(selected) {
+			return m.showHelpScreen(helpTypeInstanceAttach{}, func() {
+				ch, err := m.mosaic.AttachPanel(selected)
+				if err != nil {
+					m.handleError(err)
+					return
+				}
+				<-ch
+				m.state = stateDefault
+				m.syncSessionSizes()
+			})
+		}
 		// Opening the session is the developer seeing the answer.
 		selected.NeedsAttention = false
 
@@ -967,18 +1002,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			m.state = stateDefault
 			// Attaching resized the agent's terminal to the whole window. Put it
 			// back to the preview shape right here, rather than waiting for the
-		if m.viewMode == viewMosaic && m.mosaic.IsOnTerminalPanel(selected) {
-			return m.showHelpScreen(helpTypeInstanceAttach{}, func() {
-				ch, err := m.mosaic.AttachPanel(selected)
-				if err != nil {
-					m.handleError(err)
-					return
-				}
-				<-ch
-				m.state = stateDefault
-				m.syncSessionSizes()
-			})
-		}
 			// next resize event to notice.
 			m.syncSessionSizes()
 			m.instanceChanged()

@@ -81,11 +81,16 @@ type Instance struct {
 	usageStats *UsageStats
 
 	// titleWatch holds the name every transcript of this working directory
-	// carried when '/rename' was sent, and is non-nil only while the answer is
-	// still on its way. It is what keeps the name from arriving one press late,
-	// or from a sibling session: the name that counts is one written after the
-	// request, not whatever was already on file.
+	// carried when a rename was requested, and is non-nil only while the answer
+	// is still on its way. It is what keeps the name from arriving one press
+	// late, or from a sibling session: the name that counts is one written
+	// after the request, not whatever was already on file.
 	titleWatch map[string]string
+
+	// titleSource is which agent titleWatch is waiting on an answer from —
+	// "claude" or "cursor" — since each keeps its own chat titles on disk in a
+	// different shape. Empty when titleWatch is nil.
+	titleSource string
 
 	// The below fields are initialized upon calling Start().
 
@@ -643,11 +648,6 @@ func resumeCommand(program string) string {
 	return fmt.Sprintf("%s --continue || %s", program, program)
 }
 
-// UpdateDiffStats refreshes the uncommitted changes present in the working
-// directory.
-func (i *Instance) UpdateDiffStats() error {
-	if !i.started {
-		i.diffStats = nil
 // withBypassPermissions skips the interactive permission prompt on Claude Code
 // so a session opens ready to work instead of stalled on the first approval.
 func withBypassPermissions(program string) string {
@@ -661,6 +661,11 @@ func withBypassPermissions(program string) string {
 	return program + " --dangerously-skip-permissions"
 }
 
+// UpdateDiffStats refreshes the uncommitted changes present in the working
+// directory.
+func (i *Instance) UpdateDiffStats() error {
+	if !i.started {
+		i.diffStats = nil
 		return nil
 	}
 
@@ -880,36 +885,100 @@ type titleLine struct {
 	AITitle     string `json:"aiTitle"`
 }
 
-// RequestAgentTitle asks the agent to name its own conversation and starts
+// RequestAgentTitle asks Claude Code to name its own conversation and starts
 // waiting for the answer. Whatever name was on file until now is forgotten:
 // the session takes the next name the agent writes, so the answer to this
 // request is the one that lands, not the previous one.
 func (i *Instance) RequestAgentTitle() error {
 	i.titleWatch = titlesByTranscript(i.Path)
+	i.titleSource = "claude"
 	if err := i.SendPrompt("/rename"); err != nil {
 		i.titleWatch = nil
+		i.titleSource = ""
 		return err
 	}
 	return nil
 }
 
+// WatchCursorTitle arms the same wait RequestAgentTitle does, for the answer
+// to a '/rename-chat' sent to the Cursor CLI pane. Sending that prompt goes
+// through the pane's own tmux session (ui package), which this session
+// package cannot import, so the caller sends it and only asks this to start
+// watching for the answer.
+func (i *Instance) WatchCursorTitle() {
+	i.titleWatch = cursorTitlesByChat(i.Path)
+	i.titleSource = "cursor"
+}
+
+// CancelTitleWatch drops a wait armed by WatchCursorTitle when sending the
+// prompt that was supposed to answer it failed.
+func (i *Instance) CancelTitleWatch() {
+	i.titleWatch = nil
+	i.titleSource = ""
+}
+
 // PollAgentTitle returns the name the agent wrote in answer to the last
-// RequestAgentTitle, or "" while the answer hasn't arrived. A transcript whose
-// name is unchanged since the request is ignored — that is how a session picks
-// its own name out of a working directory several sessions share, since they
-// all write into the same transcript folder.
+// RequestAgentTitle/WatchCursorTitle, or "" while the answer hasn't arrived. A
+// chat whose name is unchanged since the request is ignored — that is how a
+// session picks its own name out of a working directory several sessions
+// share, since they all write into the same chat history.
 func (i *Instance) PollAgentTitle() string {
 	if i.titleWatch == nil {
 		return ""
 	}
-	for path, title := range titlesByTranscript(i.Path) {
+	titles := titlesByTranscript(i.Path)
+	if i.titleSource == "cursor" {
+		titles = cursorTitlesByChat(i.Path)
+	}
+	for path, title := range titles {
 		if title == "" || title == i.titleWatch[path] {
 			continue
 		}
 		i.titleWatch = nil
+		i.titleSource = ""
 		return title
 	}
 	return ""
+}
+
+// cursorChatMeta is the subset of a Cursor CLI chat's own metadata this
+// cares about: which working directory it belongs to, and its title.
+type cursorChatMeta struct {
+	Cwd   string `json:"cwd"`
+	Title string `json:"title"`
+}
+
+// cursorTitlesByChat is the name carried by each Cursor CLI chat of workDir,
+// keyed by file.
+//
+// ponytail: Cursor keys ~/.cursor/chats by a hash of the workspace this does
+// not know how to recompute, so every chat's meta.json on the machine is read
+// and filtered by its own cwd field instead of going straight to workDir's
+// folder the way titlesByTranscript does for Claude. Only runs while a
+// '/rename-chat' is in flight, same as titlesByTranscript. Upgrade: match
+// Cursor's hash function if this ever shows up in a profile.
+func cursorTitlesByChat(workDir string) map[string]string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return map[string]string{}
+	}
+	matches, err := filepath.Glob(filepath.Join(home, ".cursor", "chats", "*", "*", "meta.json"))
+	if err != nil {
+		return map[string]string{}
+	}
+	titles := make(map[string]string, len(matches))
+	for _, path := range matches {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var meta cursorChatMeta
+		if err := json.Unmarshal(data, &meta); err != nil || meta.Cwd != workDir {
+			continue
+		}
+		titles[path] = meta.Title
+	}
+	return titles
 }
 
 // titlesByTranscript is the name carried by each transcript of workDir, keyed

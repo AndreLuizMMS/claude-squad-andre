@@ -209,6 +209,24 @@ func (t *TerminalPane) SendKeysToInstance(instance *session.Instance, keys strin
 	return s.tmuxSession.SendKeys(keys)
 }
 
+// SendPromptToInstance types a prompt into one instance's pane and taps enter
+// — the same two-step SendKeys-then-enter Instance.SendPrompt does for the
+// main agent, but for whichever CLI this pane runs (the Cursor CLI pane).
+func (t *TerminalPane) SendPromptToInstance(instance *session.Instance, prompt string) error {
+	if err := t.SendKeysToInstance(instance, prompt); err != nil {
+		return err
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	t.mu.Lock()
+	s, ok := t.sessions[instance.ID()]
+	t.mu.Unlock()
+	if !ok || s.tmuxSession == nil {
+		return fmt.Errorf("o painel da sessão '%s' ainda não subiu", instance.Title)
+	}
+	return s.tmuxSession.TapEnter()
+}
+
 // setFallbackState sets the terminal pane to display a fallback message.
 // Caller must hold t.mu.
 func (t *TerminalPane) setFallbackState(message string) {

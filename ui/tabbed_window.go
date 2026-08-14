@@ -195,6 +195,17 @@ func (w *TabbedWindow) AttachTerminal() (chan struct{}, error) {
 	return pane.Attach()
 }
 
+// IsInAgentTab returns true when the active tab is the Cursor CLI pane.
+func (w *TabbedWindow) IsInAgentTab() bool {
+	return w.activeTab == AgentTab
+}
+
+// SendPromptToAgent types a prompt into the Cursor CLI pane and taps enter —
+// used to ask it to rename its own chat.
+func (w *TabbedWindow) SendPromptToAgent(instance *session.Instance, prompt string) error {
+	return w.agent.SendPromptToInstance(instance, prompt)
+}
+
 // CleanupTerminal closes the terminal and Cursor sessions
 func (w *TabbedWindow) CleanupTerminal() {
 	w.terminal.Close()

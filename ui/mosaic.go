@@ -599,6 +599,19 @@ func (m *Mosaic) Scroll(instance *session.Instance, lines int) bool {
 // fails answers zero, which pins the cell to the live screen rather than letting
 // it scroll into a window nobody can prove exists.
 func (m *Mosaic) historyOf(instance *session.Instance) int {
+// PanelOf is the exported form of panelOf, for callers outside the package
+// that need to branch on which panel a cell is showing (e.g. ctrl-r asking
+// the right agent to rename its chat).
+func (m *Mosaic) PanelOf(instance *session.Instance) int {
+	return m.panelOf(instance)
+}
+
+// SendPromptToAgent types a prompt into a cell's Cursor CLI pane and taps
+// enter — used to ask it to rename its own chat.
+func (m *Mosaic) SendPromptToAgent(instance *session.Instance, prompt string) error {
+	return m.agent.SendPromptToInstance(instance, prompt)
+}
+
 	var n int
 	var err error
 	if pane := m.paneOf(instance); pane != nil {
