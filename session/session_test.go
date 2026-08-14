@@ -444,6 +444,14 @@ func TestResumeContinuesThePreviousChatOnlyForClaude(t *testing.T) {
 	assert.Equal(t, "aider --model gemma", resumeCommand("aider --model gemma"))
 }
 
+func TestWithBypassPermissionsOnlySkipsPromptsForClaude(t *testing.T) {
+	assert.Equal(t, "claude --dangerously-skip-permissions", withBypassPermissions("claude"))
+	assert.Equal(t, "/usr/bin/claude -x --dangerously-skip-permissions", withBypassPermissions("/usr/bin/claude -x"))
+	assert.Equal(t, "claude --dangerously-skip-permissions", withBypassPermissions("claude --dangerously-skip-permissions"))
+	assert.Equal(t, "claude --permission-mode bypassPermissions", withBypassPermissions("claude --permission-mode bypassPermissions"))
+	assert.Equal(t, "aider --model gemma", withBypassPermissions("aider --model gemma"))
+}
+
 func TestRenamingAStartedSessionKeepsItsIdentity(t *testing.T) {
 	dir := t.TempDir()
 	inst, err := NewInstance(InstanceOptions{Title: "antes", Path: dir, Program: "bash"})

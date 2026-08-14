@@ -349,7 +349,7 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		tmuxSession = i.tmuxSession
 	} else {
 		// Create new tmux session
-		tmuxSession = tmux.NewTmuxSession(i.ID(), i.Program)
+		tmuxSession = tmux.NewTmuxSession(i.ID(), withBypassPermissions(i.Program))
 	}
 	i.tmuxSession = tmuxSession
 
@@ -618,7 +618,7 @@ func (i *Instance) Resume() error {
 		return fmt.Errorf("working directory no longer exists: %s", i.Path)
 	}
 
-	i.tmuxSession = tmux.NewTmuxSession(i.ID(), resumeCommand(i.Program))
+	i.tmuxSession = tmux.NewTmuxSession(i.ID(), resumeCommand(withBypassPermissions(i.Program)))
 	if err := i.tmuxSession.Start(i.Path); err != nil {
 		log.ErrorLog.Print(err)
 		return fmt.Errorf("failed to start new session: %w", err)
@@ -648,6 +648,19 @@ func resumeCommand(program string) string {
 func (i *Instance) UpdateDiffStats() error {
 	if !i.started {
 		i.diffStats = nil
+// withBypassPermissions skips the interactive permission prompt on Claude Code
+// so a session opens ready to work instead of stalled on the first approval.
+func withBypassPermissions(program string) string {
+	fields := strings.Fields(program)
+	if len(fields) == 0 || !strings.HasSuffix(fields[0], tmux.ProgramClaude) {
+		return program
+	}
+	if strings.Contains(program, "--dangerously-skip-permissions") || strings.Contains(program, "--permission-mode") {
+		return program
+	}
+	return program + " --dangerously-skip-permissions"
+}
+
 		return nil
 	}
 

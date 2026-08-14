@@ -73,9 +73,10 @@ func NewTerminalPane() *TerminalPane {
 	return newTerminalPane("term_", "")
 }
 
-// NewAgentPane creates a pane running the Cursor CLI (`agent`).
+// NewAgentPane creates a pane running the Cursor CLI (`agent`), with
+// permission prompts skipped so the pane opens ready to work.
 func NewAgentPane() *TerminalPane {
-	return newTerminalPane("agent_", "agent")
+	return newTerminalPane("agent_", "agent --force")
 }
 
 func (t *TerminalPane) SetSize(width, height int) {
