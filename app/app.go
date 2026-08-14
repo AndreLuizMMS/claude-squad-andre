@@ -929,9 +929,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		if !selected.TmuxAlive() {
 			return m, nil
 		}
-		// Terminal tab: attach to terminal session. The mosaic has no tabs, so
-		// whichever tab was left active in the list view must not decide what
-		// opens from a cell — it is always the agent.
+		// Terminal tab: attach to whichever shell tab/panel is on screen — the
+		// list view's active tab in list mode, the highlighted cell's panel in
+		// mosaic mode.
 		if m.viewMode == viewList && m.tabbedWindow.IsInTerminalTab() {
 			return m.showHelpScreen(helpTypeInstanceAttach{}, func() {
 				ch, err := m.tabbedWindow.AttachTerminal()
@@ -967,6 +967,18 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			m.state = stateDefault
 			// Attaching resized the agent's terminal to the whole window. Put it
 			// back to the preview shape right here, rather than waiting for the
+		if m.viewMode == viewMosaic && m.mosaic.IsOnTerminalPanel(selected) {
+			return m.showHelpScreen(helpTypeInstanceAttach{}, func() {
+				ch, err := m.mosaic.AttachPanel(selected)
+				if err != nil {
+					m.handleError(err)
+					return
+				}
+				<-ch
+				m.state = stateDefault
+				m.syncSessionSizes()
+			})
+		}
 			// next resize event to notice.
 			m.syncSessionSizes()
 			m.instanceChanged()

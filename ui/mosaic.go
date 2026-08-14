@@ -728,6 +728,25 @@ func (m *Mosaic) UpdateContent(instances []*session.Instance, selectedIdx, tick 
 	// A session that paused, crashed or was killed cannot take keystrokes, and
 	// holding the keyboard for it would swallow them silently.
 	if m.focused != nil && (!m.focused.Started() || m.focused.Paused() ||
+// IsOnTerminalPanel reports whether a cell is showing a shell (Cursor or Bash)
+// rather than the session's own agent — the mosaic equivalent of
+// TabbedWindow.IsInTerminalTab, so 'o' can open whichever panel the cell is
+// actually on instead of always the agent.
+func (m *Mosaic) IsOnTerminalPanel(instance *session.Instance) bool {
+	return m.paneOf(instance) != nil
+}
+
+// AttachPanel attaches to the tmux session behind the shell a cell is
+// showing. It mirrors TabbedWindow.AttachTerminal so 'o' opens the same panel
+// full screen in mosaic mode that the cell was already showing.
+func (m *Mosaic) AttachPanel(instance *session.Instance) (chan struct{}, error) {
+	pane := m.paneOf(instance)
+	if pane == nil {
+		return nil, fmt.Errorf("no terminal session to attach to")
+	}
+	return pane.Attach()
+}
+
 		(m.focused.HasExited() && m.panelOf(m.focused) == PreviewTab)) {
 		m.focused = nil
 	}

@@ -122,7 +122,7 @@ func (m *home) handleMosaicKey(msg tea.KeyMsg) (cmd tea.Cmd, handled bool) {
 	// Navigating: enter takes the keyboard into the highlighted cell. It is
 	// spelled out rather than read from the key map because the map sends both
 	// enter and o to the same action, and here they part ways — o still opens
-	// the session full screen.
+	// the highlighted cell's panel full screen, via the KeyEnter case in app.go.
 	if msg.String() == "enter" {
 		if err := m.mosaic.Focus(m.list.GetSelectedInstance()); err != nil {
 			return m.handleError(err), true
