@@ -168,7 +168,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		ctx:          ctx,
 		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), terminalPane, agentPane),
+		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), terminalPane, agentPane, ui.NewDockerPane()),
 		mosaic:       ui.NewMosaic(terminalPane, agentPane),
 		errBox:       ui.NewErrBox(),
 		storage:      storage,
