@@ -6,7 +6,9 @@ import (
 	"claude-squad/session"
 	"claude-squad/session/tmux"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -374,4 +376,44 @@ func TestTerminalCloseForInstance(t *testing.T) {
 	tp.mu.Lock()
 	require.Len(t, tp.sessions, 1, "non-existent close should not affect existing sessions")
 	tp.mu.Unlock()
+}
+
+func TestDockerPaneFallsBackWithoutComposeFile(t *testing.T) {
+	log.Initialize(false)
+	defer log.Close()
+
+	instance := makeStartedInstance(t, "docker-no-compose")
+	defer func() { _ = instance.Kill() }()
+
+	tp := NewDockerPane()
+	tp.SetSize(80, 30)
+
+	err := tp.UpdateContent(instance)
+	require.NoError(t, err)
+
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	require.True(t, tp.fallback, "should fall back to a message when there is no compose file")
+	require.Contains(t, tp.fallbackText, "Nenhum docker-compose encontrado")
+}
+
+func TestDockerPaneAcceptsComposeFile(t *testing.T) {
+	log.Initialize(false)
+	defer log.Close()
+
+	instance := makeStartedInstance(t, "docker-with-compose")
+	defer func() { _ = instance.Kill() }()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(instance.Path, "docker-compose.yml"), []byte(""), 0644))
+
+	tp := NewDockerPane()
+	tp.SetSize(80, 30)
+
+	err := tp.UpdateContent(instance)
+	require.NoError(t, err)
+
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	require.NotContains(t, tp.fallbackText, "Nenhum docker-compose encontrado",
+		"a compose file at the session root must clear the precheck (whatever happens next — e.g. no docker binary in PATH — is a different fallback message)")
 }

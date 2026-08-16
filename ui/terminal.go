@@ -55,6 +55,12 @@ type TerminalPane struct {
 	prefix  string // tmux session name prefix, keeps panes from colliding
 	program string // command run inside the session; empty means $SHELL
 
+	// precheck runs before a session is created for an instance; when it
+	// reports skip, the pane goes straight to its fallback state instead of
+	// starting a shell. Only the Docker pane sets this — Bash and Cursor
+	// always start.
+	precheck func(instance *session.Instance) (skip bool, message string)
+
 	isScrolling bool
 	viewport    viewport.Model
 }
@@ -77,6 +83,22 @@ func NewTerminalPane() *TerminalPane {
 // permission prompts skipped so the pane opens ready to work.
 func NewAgentPane() *TerminalPane {
 	return newTerminalPane("agent_", "agent --force")
+}
+
+// NewDockerPane creates a pane that tails a session's docker compose logs. A
+// session with no compose file at the root of its directory has nothing to
+// run docker compose against, so the pane shows a message instead of a shell
+// — the same fallback rendering a paused or not-yet-started session already
+// gets.
+func NewDockerPane() *TerminalPane {
+	tp := newTerminalPane("docker_", "docker compose logs -f --tail=200")
+	tp.precheck = func(instance *session.Instance) (bool, string) {
+		if _, ok := session.DetectComposeFile(instance.Path); !ok {
+			return true, fmt.Sprintf("Nenhum docker-compose encontrado em %s.", instance.Path)
+		}
+		return false, ""
+	}
+	return tp
 }
 
 func (t *TerminalPane) SetSize(width, height int) {
@@ -326,6 +348,13 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 		}
 		// Session died, remove stale entry and recreate below
 		delete(t.sessions, instance.ID())
+	}
+
+	if t.precheck != nil {
+		if skip, message := t.precheck(instance); skip {
+			t.setFallbackState(message)
+			return nil
+		}
 	}
 
 	program := t.program
