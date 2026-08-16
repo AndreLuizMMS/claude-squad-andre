@@ -36,6 +36,7 @@ const (
 	PreviewTab int = iota
 	AgentTab
 	TerminalTab
+	DockerTab
 )
 
 type Tab struct {
@@ -55,19 +56,22 @@ type TabbedWindow struct {
 	preview  *PreviewPane
 	terminal *TerminalPane
 	agent    *TerminalPane
+	docker   *TerminalPane
 	instance *session.Instance
 }
 
-func NewTabbedWindow(preview *PreviewPane, terminal, agent *TerminalPane) *TabbedWindow {
+func NewTabbedWindow(preview *PreviewPane, terminal, agent, docker *TerminalPane) *TabbedWindow {
 	return &TabbedWindow{
 		tabs: []string{
 			"Claude Code",
 			"Cursor CLI",
 			"Bash $",
+			"Docker",
 		},
 		preview:  preview,
 		terminal: terminal,
 		agent:    agent,
+		docker:   docker,
 	}
 }
 
@@ -79,6 +83,8 @@ func (w *TabbedWindow) activeTerminal() *TerminalPane {
 		return w.terminal
 	case AgentTab:
 		return w.agent
+	case DockerTab:
+		return w.docker
 	}
 	return nil
 }
@@ -113,6 +119,7 @@ func (w *TabbedWindow) SetSize(width, height int) {
 	w.preview.SetSize(contentWidth, contentHeight)
 	w.terminal.SetSize(contentWidth, contentHeight)
 	w.agent.SetSize(contentWidth, contentHeight)
+	w.docker.SetSize(contentWidth, contentHeight)
 }
 
 func (w *TabbedWindow) GetPreviewSize() (width, height int) {
@@ -206,16 +213,32 @@ func (w *TabbedWindow) SendPromptToAgent(instance *session.Instance, prompt stri
 	return w.agent.SendPromptToInstance(instance, prompt)
 }
 
-// CleanupTerminal closes the terminal and Cursor sessions
+// SendDockerCommand interrupts whatever the Docker tab's pane is running —
+// almost always the log tail — and runs a new docker compose command in its
+// place. The interrupt is a real Ctrl-C byte (0x03), not the two characters
+// "C-c": SendKeysToInstance writes straight into the pane's PTY, it does not
+// go through tmux's own key-name parser. It works end to end because the pane
+// is a real shell tailing the logs, not the log tail itself: the interrupt
+// stops the tail and leaves a live prompt for the command typed next.
+func (w *TabbedWindow) SendDockerCommand(instance *session.Instance, command string) error {
+	if err := w.docker.SendKeysToInstance(instance, "\x03"); err != nil {
+		return err
+	}
+	return w.docker.SendPromptToInstance(instance, command)
+}
+
+// CleanupTerminal closes the terminal, Cursor and Docker sessions
 func (w *TabbedWindow) CleanupTerminal() {
 	w.terminal.Close()
 	w.agent.Close()
+	w.docker.Close()
 }
 
 // CleanupTerminalForInstance closes the cached shell sessions for the given instance title.
 func (w *TabbedWindow) CleanupTerminalForInstance(title string) {
 	w.terminal.CloseForInstance(title)
 	w.agent.CloseForInstance(title)
+	w.docker.CloseForInstance(title)
 }
 
 // IsPreviewInScrollMode returns true if the preview pane is in scroll mode

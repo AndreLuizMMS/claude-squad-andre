@@ -48,6 +48,10 @@ const (
 	// KeyRenameAgent copies the name the agent gave its own conversation onto
 	// the session.
 	KeyRenameAgent
+
+	// KeyDockerAction opens the action menu of the Docker tab (logs, restart,
+	// stop, up).
+	KeyDockerAction
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -79,6 +83,7 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"ctrl+@":     KeyMouseSelect,
 	"ctrl+space": KeyMouseSelect,
 	"ctrl+r":     KeyRenameAgent,
+	"a":          KeyDockerAction,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -174,6 +179,11 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	KeyRenameAgent: key.NewBinding(
 		key.WithKeys("ctrl+r"),
 		key.WithHelp("ctrl-r", "copiar o nome do agente"),
+	),
+
+	KeyDockerAction: key.NewBinding(
+		key.WithKeys("a"),
+		key.WithHelp("a", "ação docker"),
 	),
 
 	// -- Special keybindings --

@@ -9,7 +9,26 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/stretchr/testify/require"
 )
+
+func TestMosaicPanelNamesIncludesDocker(t *testing.T) {
+	require.Len(t, mosaicPanelNames, 4)
+	require.Equal(t, "Docker", mosaicPanelNames[DockerTab])
+}
+
+func TestMosaicPaneOfReturnsDockerPane(t *testing.T) {
+	docker := NewDockerPane()
+	m := NewMosaic(nil, nil, docker)
+
+	instance, err := session.NewInstance(session.InstanceOptions{
+		Title: "mosaic-docker", Path: t.TempDir(), Program: "bash",
+	})
+	require.NoError(t, err)
+
+	m.panel[instance.ID()] = DockerTab
+	require.Same(t, docker, m.paneOf(instance))
+}
 
 // namesFor builds the project list planGrid takes: n sessions, all in the same
 // project, which is the ungrouped case.
@@ -281,7 +300,7 @@ func TestPlanGridNoSessions(t *testing.T) {
 // A session with no terminal to type into refuses the keyboard instead of
 // swallowing the keys.
 func TestFocusRefusesSessionsThatCannotType(t *testing.T) {
-	m := NewMosaic(nil, nil)
+	m := NewMosaic(nil, nil, nil)
 
 	if err := m.Focus(nil); err == nil {
 		t.Fatal("focar em nada deveria falhar")
@@ -314,7 +333,7 @@ func TestFocusRefusesSessionsThatCannotType(t *testing.T) {
 // Each cell remembers its own panel, and the cached screen of one panel must
 // never show up under the title of another.
 func TestCyclePanelIsPerCell(t *testing.T) {
-	m := NewMosaic(nil, nil)
+	m := NewMosaic(nil, nil, nil)
 	inst, err := session.FromInstanceData(session.InstanceData{
 		Title: "um", Path: t.TempDir(), Program: "claude",
 	})
@@ -329,6 +348,7 @@ func TestCyclePanelIsPerCell(t *testing.T) {
 	if got := m.panelOf(inst); got != AgentTab {
 		t.Fatalf("depois de um tab = %d, esperado Cursor", got)
 	}
+	m.CyclePanel(inst)
 	m.CyclePanel(inst)
 	m.CyclePanel(inst)
 	if got := m.panelOf(inst); got != PreviewTab {
@@ -356,7 +376,7 @@ func TestPlanGridPacksWhenNotGrouped(t *testing.T) {
 // name, its marker and its directory — and it says it inside its own slot: a
 // line wider than the cell would push its neighbours off the screen.
 func TestCellReadsLikeAListRow(t *testing.T) {
-	m := NewMosaic(nil, nil)
+	m := NewMosaic(nil, nil, nil)
 	dir := t.TempDir()
 	inst, err := session.FromInstanceData(session.InstanceData{
 		Title: "sessao-com-nome-bem-comprido", Path: dir, Program: "claude", Status: session.Ready,
@@ -392,7 +412,7 @@ func TestCellReadsLikeAListRow(t *testing.T) {
 // Arrows are literal in the mosaic: right goes right, down goes down, and the
 // edges hold instead of wrapping to the other side of the screen.
 func TestMoveIsLiteral(t *testing.T) {
-	m := NewMosaic(nil, nil)
+	m := NewMosaic(nil, nil, nil)
 	m.SetSize(200, 50)
 	instances := make([]*session.Instance, 4) // grade 2x2
 
@@ -512,7 +532,7 @@ func TestPaintCaretLandsOnTheColumnTheTerminalReported(t *testing.T) {
 // two ends matter: it may never go past the live screen, and it has to stop
 // asking for history tmux does not keep.
 func TestScrollStopsAtTheLiveScreenAndAtTheTopOfTheHistory(t *testing.T) {
-	m := NewMosaic(nil, nil)
+	m := NewMosaic(nil, nil, nil)
 	inst := makeStartedInstance(t, "worker")
 	// tmux is the one that knows how far back this session can be read, so the
 	// mock behind it is what decides where scrolling has to stop.
