@@ -59,7 +59,7 @@ const slowCellEveryNTicks = 5
 
 // mosaicPanelNames are the panels a cell can show, indexed by the same tab
 // constants the list view uses, so a session reads the same in both modes.
-var mosaicPanelNames = []string{"Claude Code", "Cursor CLI", "Bash $"}
+var mosaicPanelNames = []string{"Claude Code", "Cursor CLI", "Bash $", "Docker"}
 
 var (
 	// Green, and only for the cell that is actually taking keystrokes. Typing into
@@ -520,7 +520,7 @@ type Mosaic struct {
 	// are only re-read every few ticks still have something to draw in between.
 	content map[string]string
 
-	// panel is which of the three terminals each session is showing. Sessions
+	// panel is which of the four terminals each session is showing. Sessions
 	// not in the map are on the agent, which is what the mosaic is for.
 	panel map[string]int
 
@@ -538,18 +538,19 @@ type Mosaic struct {
 	cursorY       int
 	cursorVisible bool
 
-	// terminal and agent are the same panes the list view uses, so a shell
-	// opened in one view is the same shell in the other.
-	terminal, agent *TerminalPane
+	// terminal, agent and docker are the same panes the list view uses, so a
+	// shell or the Docker tab opened in one view is the same one in the other.
+	terminal, agent, docker *TerminalPane
 }
 
-func NewMosaic(terminal, agent *TerminalPane) *Mosaic {
+func NewMosaic(terminal, agent, docker *TerminalPane) *Mosaic {
 	return &Mosaic{
 		content:  make(map[string]string),
 		panel:    make(map[string]int),
 		scroll:   make(map[string]int),
 		terminal: terminal,
 		agent:    agent,
+		docker:   docker,
 	}
 }
 
@@ -612,8 +613,8 @@ func (m *Mosaic) SendPromptToAgent(instance *session.Instance, prompt string) er
 	return m.agent.SendPromptToInstance(instance, prompt)
 }
 
-// CyclePanel moves one cell to the next panel — agent, Cursor, shell — the same
-// order the tabs follow in the list view.
+// CyclePanel moves one cell to the next panel — agent, Cursor, shell, Docker —
+// the same order the tabs follow in the list view.
 func (m *Mosaic) CyclePanel(instance *session.Instance) {
 	if instance == nil {
 		return
@@ -724,6 +725,8 @@ func (m *Mosaic) paneOf(instance *session.Instance) *TerminalPane {
 		return m.agent
 	case TerminalTab:
 		return m.terminal
+	case DockerTab:
+		return m.docker
 	}
 	return nil
 }
