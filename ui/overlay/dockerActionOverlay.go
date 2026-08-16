@@ -6,10 +6,8 @@ import (
 )
 
 // dockerActions is a shell command run into the Docker pane's tmux session
-// per key, in the order they are listed to the developer. logsAction is what
-// the pane goes back to after restart/stop/up, so the developer can watch the
-// result without picking Logs again by hand — kept here as the source of
-// truth both HandleKeyPress and Render read from.
+// per key, in the order they are listed to the developer — the single source
+// of truth both HandleKeyPress and Render read from.
 var dockerActions = []struct {
 	key, label, command string
 }{

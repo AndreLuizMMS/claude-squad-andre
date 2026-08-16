@@ -217,7 +217,9 @@ func (w *TabbedWindow) SendPromptToAgent(instance *session.Instance, prompt stri
 // almost always the log tail — and runs a new docker compose command in its
 // place. The interrupt is a real Ctrl-C byte (0x03), not the two characters
 // "C-c": SendKeysToInstance writes straight into the pane's PTY, it does not
-// go through tmux's own key-name parser.
+// go through tmux's own key-name parser. It works end to end because the pane
+// is a real shell tailing the logs, not the log tail itself: the interrupt
+// stops the tail and leaves a live prompt for the command typed next.
 func (w *TabbedWindow) SendDockerCommand(instance *session.Instance, command string) error {
 	if err := w.docker.SendKeysToInstance(instance, "\x03"); err != nil {
 		return err

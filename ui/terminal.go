@@ -61,8 +61,22 @@ type TerminalPane struct {
 	// always start.
 	precheck func(instance *session.Instance) (skip bool, message string)
 
+	// initialCommand, when set, is typed into the pane (plus Enter) right
+	// after a brand-new tmux session starts — used to open the Docker pane
+	// already tailing logs instead of at a bare shell prompt.
+	initialCommand string
+
 	isScrolling bool
 	viewport    viewport.Model
+}
+
+// binaryOf returns the executable name of a command line, dropping its flags,
+// so LookPath checks the binary instead of the whole string.
+func binaryOf(program string) string {
+	if fields := strings.Fields(program); len(fields) > 0 {
+		return fields[0]
+	}
+	return program
 }
 
 func newTerminalPane(prefix, program string) *TerminalPane {
@@ -85,13 +99,16 @@ func NewAgentPane() *TerminalPane {
 	return newTerminalPane("agent_", "agent --force")
 }
 
-// NewDockerPane creates a pane that tails a session's docker compose logs. A
-// session with no compose file at the root of its directory has nothing to
-// run docker compose against, so the pane shows a message instead of a shell
-// — the same fallback rendering a paused or not-yet-started session already
-// gets.
+// NewDockerPane creates a pane running a real shell that opens already tailing
+// the session's docker compose logs. The shell is what makes Ctrl-C usable:
+// interrupting the tail leaves a live prompt for the next docker command
+// instead of killing the tmux session. A session with no compose file at the
+// root of its directory has nothing to run docker compose against, so the pane
+// shows a message instead of a shell — the same fallback rendering a paused or
+// not-yet-started session already gets.
 func NewDockerPane() *TerminalPane {
-	tp := newTerminalPane("docker_", "docker compose logs -f --tail=200")
+	tp := newTerminalPane("docker_", "")
+	tp.initialCommand = "docker compose logs -f --tail=200"
 	tp.precheck = func(instance *session.Instance) (bool, string) {
 		if _, ok := session.DetectComposeFile(instance.Path); !ok {
 			return true, fmt.Sprintf("Nenhum docker-compose encontrado em %s.", instance.Path)
@@ -143,7 +160,7 @@ func (t *TerminalPane) CaptureForInstance(instance *session.Instance, width, hei
 		return "", nil
 	}
 	if t.program != "" {
-		if _, err := exec.LookPath(t.program); err != nil {
+		if _, err := exec.LookPath(binaryOf(t.program)); err != nil {
 			return fmt.Sprintf("Comando '%s' não encontrado no PATH.", t.program), nil
 		}
 	}
@@ -363,7 +380,7 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 		if program == "" {
 			program = "/bin/sh"
 		}
-	} else if _, err := exec.LookPath(program); err != nil {
+	} else if _, err := exec.LookPath(binaryOf(program)); err != nil {
 		// A missing binary would make tmux start and die immediately, leaving
 		// only a generic "unavailable" message. Name the actual problem.
 		t.setFallbackState(fmt.Sprintf("Comando '%s' não encontrado no PATH.", program))
@@ -374,6 +391,7 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 	ts := tmux.NewTmuxSession(termName, program)
 
 	// Check if session already exists (e.g. from a previous run)
+	fresh := false
 	if ts.DoesSessionExist() {
 		if err := ts.Restore(); err != nil {
 			// Session exists but can't restore, kill it and start fresh
@@ -382,10 +400,22 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 			if err := ts.Start(worktreePath); err != nil {
 				return fmt.Errorf("terminal pane: failed to start session: %w", err)
 			}
+			fresh = true
 		}
 	} else {
 		if err := ts.Start(worktreePath); err != nil {
 			return fmt.Errorf("terminal pane: failed to start session: %w", err)
+		}
+		fresh = true
+	}
+
+	// A restored session already has whatever it was running; only a brand-new
+	// shell needs its opening command typed in (the Docker pane's log tail).
+	if fresh && t.initialCommand != "" {
+		if err := ts.SendKeys(t.initialCommand); err != nil {
+			log.InfoLog.Printf("terminal pane: failed to send initial command: %v", err)
+		} else if err := ts.TapEnter(); err != nil {
+			log.InfoLog.Printf("terminal pane: failed to enter initial command: %v", err)
 		}
 	}
 

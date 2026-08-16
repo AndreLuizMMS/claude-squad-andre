@@ -407,6 +407,7 @@ func TestDockerPaneAcceptsComposeFile(t *testing.T) {
 		filepath.Join(instance.Path, "docker-compose.yml"), []byte(""), 0644))
 
 	tp := NewDockerPane()
+	defer tp.Close()
 	tp.SetSize(80, 30)
 
 	err := tp.UpdateContent(instance)
@@ -414,6 +415,8 @@ func TestDockerPaneAcceptsComposeFile(t *testing.T) {
 
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
+	require.False(t, tp.fallback,
+		"a compose file plus a real shell must give a live pane, not a fallback")
 	require.NotContains(t, tp.fallbackText, "Nenhum docker-compose encontrado",
 		"a compose file at the session root must clear the precheck (whatever happens next — e.g. no docker binary in PATH — is a different fallback message)")
 }
