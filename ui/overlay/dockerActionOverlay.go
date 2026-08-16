@@ -5,16 +5,19 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// dockerActions is a shell command run into the Docker pane's tmux session
-// per key, in the order they are listed to the developer — the single source
-// of truth both HandleKeyPress and Render read from.
+// dockerActions is the docker compose verb run for each key, in the order
+// they are listed to the developer — the single source of truth both
+// HandleKeyPress and Render read from. Just the verb, not the full command:
+// the caller (TabbedWindow.SendDockerCommand) is the one that knows which
+// compose file this session actually has, and prefixes `docker compose -f
+// <that file>` onto it.
 var dockerActions = []struct {
-	key, label, command string
+	key, label, verb string
 }{
-	{"l", "Logs", "docker compose logs -f --tail=200"},
-	{"r", "Restart", "docker compose restart"},
-	{"x", "Stop", "docker compose stop"},
-	{"u", "Up", "docker compose up -d"},
+	{"l", "Logs", "logs -f --tail=200"},
+	{"r", "Restart", "restart"},
+	{"x", "Stop", "stop"},
+	{"u", "Up", "up -d"},
 }
 
 // DockerActionOverlay is the menu the Docker tab opens on 'a': one key per
@@ -22,8 +25,9 @@ var dockerActions = []struct {
 // ConfirmationOverlay uses for y/n.
 type DockerActionOverlay struct {
 	width int
-	// Command is the shell command for the action the developer picked, set
-	// by HandleKeyPress. Empty when the overlay was cancelled instead.
+	// Command is the docker compose verb for the action the developer
+	// picked (e.g. "restart"), set by HandleKeyPress. Empty when the
+	// overlay was cancelled instead.
 	Command string
 }
 
@@ -40,7 +44,7 @@ func (d *DockerActionOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 	}
 	for _, a := range dockerActions {
 		if msg.String() == a.key {
-			d.Command = a.command
+			d.Command = a.verb
 			return true
 		}
 	}

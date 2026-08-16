@@ -12,10 +12,10 @@ func TestDockerActionOverlayPicksCommand(t *testing.T) {
 		key     string
 		command string
 	}{
-		{"l", "docker compose logs -f --tail=200"},
-		{"r", "docker compose restart"},
-		{"x", "docker compose stop"},
-		{"u", "docker compose up -d"},
+		{"l", "logs -f --tail=200"},
+		{"r", "restart"},
+		{"x", "stop"},
+		{"u", "up -d"},
 	}
 
 	for _, tt := range tests {

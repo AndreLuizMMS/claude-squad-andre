@@ -61,10 +61,11 @@ type TerminalPane struct {
 	// always start.
 	precheck func(instance *session.Instance) (skip bool, message string)
 
-	// initialCommand, when set, is typed into the pane (plus Enter) right
-	// after a brand-new tmux session starts — used to open the Docker pane
-	// already tailing logs instead of at a bare shell prompt.
-	initialCommand string
+	// initialCommand, when set, is called for a brand-new tmux session and
+	// its result — if non-empty — is typed into the pane (plus Enter). A
+	// function rather than a fixed string: the Docker pane's opening command
+	// names the compose file it found, which differs per instance.
+	initialCommand func(instance *session.Instance) string
 
 	isScrolling bool
 	viewport    viewport.Model
@@ -108,14 +109,38 @@ func NewAgentPane() *TerminalPane {
 // not-yet-started session already gets.
 func NewDockerPane() *TerminalPane {
 	tp := newTerminalPane("docker_", "")
-	tp.initialCommand = "docker compose logs -f --tail=200"
 	tp.precheck = func(instance *session.Instance) (bool, string) {
 		if _, ok := session.DetectComposeFile(instance.Path); !ok {
 			return true, fmt.Sprintf("Nenhum docker-compose encontrado em %s.", instance.Path)
 		}
 		return false, ""
 	}
+	tp.initialCommand = func(instance *session.Instance) string {
+		path, ok := session.DetectComposeFile(instance.Path)
+		if !ok {
+			return ""
+		}
+		return dockerComposeCommand(path, "logs -f --tail=200")
+	}
 	return tp
+}
+
+// dockerComposeCommand builds a docker compose invocation pinned to the
+// compose file this session actually has — plain `docker compose <verb>`
+// only auto-detects the canonical names in the current directory, which
+// misses every layout DetectComposeFile widens for (a docker/ subfolder, an
+// environment-suffixed name), so every command here names its file with -f
+// explicitly instead of relying on that auto-detection.
+func dockerComposeCommand(composeFile, verb string) string {
+	return fmt.Sprintf("docker compose -f %s %s", shellQuote(composeFile), verb)
+}
+
+// shellQuote wraps a string in single quotes for safe use as one shell
+// argument, escaping any single quote already in it. Needed because the
+// compose path is typed into a real shell via raw PTY bytes, not passed as
+// an argv element the shell can't reinterpret.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func (t *TerminalPane) SetSize(width, height int) {
@@ -416,11 +441,13 @@ func (t *TerminalPane) ensureSessionLocked(instance *session.Instance) error {
 
 	// A restored session already has whatever it was running; only a brand-new
 	// shell needs its opening command typed in (the Docker pane's log tail).
-	if fresh && t.initialCommand != "" {
-		if err := ts.SendKeys(t.initialCommand); err != nil {
-			log.InfoLog.Printf("terminal pane: failed to send initial command: %v", err)
-		} else if err := ts.TapEnter(); err != nil {
-			log.InfoLog.Printf("terminal pane: failed to enter initial command: %v", err)
+	if fresh && t.initialCommand != nil {
+		if cmd := t.initialCommand(instance); cmd != "" {
+			if err := ts.SendKeys(cmd); err != nil {
+				log.InfoLog.Printf("terminal pane: failed to send initial command: %v", err)
+			} else if err := ts.TapEnter(); err != nil {
+				log.InfoLog.Printf("terminal pane: failed to enter initial command: %v", err)
+			}
 		}
 	}
 

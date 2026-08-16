@@ -443,3 +443,22 @@ func TestCaptureForInstanceSurfacesPrecheckFallback(t *testing.T) {
 	require.Contains(t, content, "Nenhum docker-compose encontrado",
 		"CaptureForInstance must return the precheck's fallback message as content, not an empty string")
 }
+
+// TestDockerPaneInitialCommandNamesTheComposeFile guards real project
+// layouts (Cortz's docker-compose.dev.yml, DOXAR's docker/compose.yml):
+// plain `docker compose logs` only auto-detects the canonical names in the
+// current directory, so the opening command must always name the file it
+// actually found with -f.
+func TestDockerPaneInitialCommandNamesTheComposeFile(t *testing.T) {
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, "docker-compose.dev.yml")
+	require.NoError(t, os.WriteFile(composeFile, []byte(""), 0644))
+
+	instance, err := session.NewInstance(session.InstanceOptions{
+		Title: "docker-initial-cmd", Path: dir, Program: "bash",
+	})
+	require.NoError(t, err)
+
+	tp := NewDockerPane()
+	require.Equal(t, "docker compose -f '"+composeFile+"' logs -f --tail=200", tp.initialCommand(instance))
+}

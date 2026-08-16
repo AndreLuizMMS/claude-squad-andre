@@ -4,6 +4,7 @@ import (
 	"claude-squad/log"
 	"claude-squad/session/tmux"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,6 +48,8 @@ func TestSendDockerCommandInterruptsThenTypes(t *testing.T) {
 
 	instance := makeStartedInstance(t, "docker-send")
 	defer func() { _ = instance.Kill() }()
+	composeFile := filepath.Join(instance.Path, "docker-compose.yml")
+	require.NoError(t, os.WriteFile(composeFile, []byte(""), 0644))
 
 	w := newTestTabbedWindow()
 	ptyFactory := &MockPtyFactory{t: t, cmdExec: mockCmdExec("", true)}
@@ -54,9 +57,9 @@ func TestSendDockerCommandInterruptsThenTypes(t *testing.T) {
 	require.NoError(t, ts.Restore()) // opens the mock PTY the writes land in
 	injectSession(w.docker, instance.ID(), ts, instance.Path)
 
-	require.NoError(t, w.SendDockerCommand(instance, "docker compose restart"))
+	require.NoError(t, w.SendDockerCommand(instance, "restart"))
 
 	written, err := os.ReadFile(ptyFactory.files[0].Name())
 	require.NoError(t, err)
-	require.Equal(t, "\x03docker compose restart\r", string(written))
+	require.Equal(t, "\x03docker compose -f '"+composeFile+"' restart\r", string(written))
 }

@@ -214,17 +214,22 @@ func (w *TabbedWindow) SendPromptToAgent(instance *session.Instance, prompt stri
 }
 
 // SendDockerCommand interrupts whatever the Docker tab's pane is running —
-// almost always the log tail — and runs a new docker compose command in its
-// place. The interrupt is a real Ctrl-C byte (0x03), not the two characters
-// "C-c": SendKeysToInstance writes straight into the pane's PTY, it does not
-// go through tmux's own key-name parser. It works end to end because the pane
-// is a real shell tailing the logs, not the log tail itself: the interrupt
-// stops the tail and leaves a live prompt for the command typed next.
-func (w *TabbedWindow) SendDockerCommand(instance *session.Instance, command string) error {
+// almost always the log tail — and runs a docker compose verb (e.g.
+// "restart") against this session's actual compose file. The interrupt is a
+// real Ctrl-C byte (0x03), not the two characters "C-c": SendKeysToInstance
+// writes straight into the pane's PTY, it does not go through tmux's own
+// key-name parser. It works end to end because the pane is a real shell
+// tailing the logs, not the log tail itself: the interrupt stops the tail and
+// leaves a live prompt for the command typed next.
+func (w *TabbedWindow) SendDockerCommand(instance *session.Instance, verb string) error {
+	composeFile, ok := session.DetectComposeFile(instance.Path)
+	if !ok {
+		return fmt.Errorf("nenhum docker-compose encontrado em %s", instance.Path)
+	}
 	if err := w.docker.SendKeysToInstance(instance, "\x03"); err != nil {
 		return err
 	}
-	return w.docker.SendPromptToInstance(instance, command)
+	return w.docker.SendPromptToInstance(instance, dockerComposeCommand(composeFile, verb))
 }
 
 // CleanupTerminal closes the terminal, Cursor and Docker sessions
