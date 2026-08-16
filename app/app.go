@@ -47,6 +47,8 @@ const (
 	stateConfirm
 	// stateRename is the state when an existing session is being renamed.
 	stateRename
+	// stateDockerAction is the state when the Docker tab's action menu is displayed.
+	stateDockerAction
 )
 
 type home struct {
@@ -144,6 +146,8 @@ type home struct {
 	textOverlay *overlay.TextOverlay
 	// confirmationOverlay displays confirmation modals
 	confirmationOverlay *overlay.ConfirmationOverlay
+	// dockerActionOverlay displays the Docker tab's action menu
+	dockerActionOverlay *overlay.DockerActionOverlay
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -161,15 +165,15 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	}
 
 	// The shell panes are shared by both views: a Bash opened in a mosaic cell is
-	// the same Bash the list view's tab shows, not a second one.
-	terminalPane, agentPane := ui.NewTerminalPane(), ui.NewAgentPane()
+	// the same Bash the list view's tab shows, not a second one — same for Docker.
+	terminalPane, agentPane, dockerPane := ui.NewTerminalPane(), ui.NewAgentPane(), ui.NewDockerPane()
 
 	h := &home{
 		ctx:          ctx,
 		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), terminalPane, agentPane, ui.NewDockerPane()),
-		mosaic:       ui.NewMosaic(terminalPane, agentPane, ui.NewDockerPane()),
+		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), terminalPane, agentPane, dockerPane),
+		mosaic:       ui.NewMosaic(terminalPane, agentPane, dockerPane),
 		errBox:       ui.NewErrBox(),
 		storage:      storage,
 		appConfig:    appConfig,
@@ -398,7 +402,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 	// to a tea.Cmd goroutine, so letters that happen to be global shortcuts
 	// ("c", "o", "r", ...) arrive out of order and the typed word scrambles.
 	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm ||
-		m.state == stateRename || m.state == stateNew {
+		m.state == stateRename || m.state == stateNew || m.state == stateDockerAction {
 		return nil, false
 	}
 	// A focused mosaic cell is the developer typing to an agent. Flashing the
@@ -682,6 +686,21 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle the Docker tab's action menu
+	if m.state == stateDockerAction {
+		shouldClose := m.dockerActionOverlay.HandleKeyPress(msg)
+		if shouldClose {
+			command := m.dockerActionOverlay.Command
+			m.state = stateDefault
+			m.dockerActionOverlay = nil
+			if command != "" {
+				return m, m.runDockerAction(command)
+			}
+			return m, nil
+		}
+		return m, nil
+	}
+
 	// Mouse selection is a mode, and ctrl+c is what ends a mode: it is the key
 	// the hand is already on after copying. It comes before the mosaic and before
 	// quit so the way out is the same wherever the mode was turned on.
@@ -771,6 +790,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 		if err := selected.RequestAgentTitle(); err != nil {
 			return m, m.handleError(err)
+		}
+		return m, nil
+	case keys.KeyDockerAction:
+		// The action menu only means something in the list view, on the
+		// Docker tab itself — the mosaic keeps Docker as a read-only glance.
+		if m.viewMode == viewList && m.tabbedWindow.GetActiveTab() == ui.DockerTab {
+			m.state = stateDockerAction
+			m.dockerActionOverlay = overlay.NewDockerActionOverlay()
 		}
 		return m, nil
 	case keys.KeyHelp:
@@ -1488,6 +1515,21 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	return nil
 }
 
+// runDockerAction sends a docker compose command to the Docker tab's pane,
+// interrupting whatever it was running first — almost always the log tail.
+func (m *home) runDockerAction(command string) tea.Cmd {
+	selected := m.list.GetSelectedInstance()
+	if selected == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		if err := m.tabbedWindow.SendDockerCommand(selected, command); err != nil {
+			return err
+		}
+		return instanceChangedMsg{}
+	}
+}
+
 func (m *home) View() string {
 	// The list and the window already open with a blank line of their own
 	// (title spacing, tab row) — no extra top padding stacked on here, or the
@@ -1528,6 +1570,11 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("confirmation overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.confirmationOverlay.Render(), mainView, true, true)
+	} else if m.state == stateDockerAction {
+		if m.dockerActionOverlay == nil {
+			log.ErrorLog.Printf("docker action overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.dockerActionOverlay.Render(), mainView, true, true)
 	} else if m.state == stateNew && m.viewMode == viewMosaic {
 		// The inline form lives in the list, which the mosaic does not draw.
 		return overlay.PlaceOverlay(0, 0, m.newInstanceForm(), mainView, true, true)
