@@ -164,6 +164,11 @@ func (t *TerminalPane) CaptureForInstance(instance *session.Instance, width, hei
 			return fmt.Sprintf("Comando '%s' não encontrado no PATH.", t.program), nil
 		}
 	}
+	if t.precheck != nil {
+		if skip, message := t.precheck(instance); skip {
+			return message, nil
+		}
+	}
 
 	// ensureSessionLocked points the pane at whatever it just started; the list
 	// view is still showing its own instance and must not be moved.

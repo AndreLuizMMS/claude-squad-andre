@@ -420,3 +420,26 @@ func TestDockerPaneAcceptsComposeFile(t *testing.T) {
 	require.NotContains(t, tp.fallbackText, "Nenhum docker-compose encontrado",
 		"a compose file at the session root must clear the precheck (whatever happens next — e.g. no docker binary in PATH — is a different fallback message)")
 }
+
+// TestCaptureForInstanceSurfacesPrecheckFallback guards the mosaic's read
+// path: the mosaic never calls String() on the pane, it only reads whatever
+// CaptureForInstance hands back and shows that as the cell's content. A
+// precheck skip must therefore return its message as the captured content
+// itself, the same way the pre-existing "comando não encontrado" check a few
+// lines above it already does — otherwise the cell renders nothing at all,
+// which is exactly the "célula em branco" bug this test reproduces.
+func TestCaptureForInstanceSurfacesPrecheckFallback(t *testing.T) {
+	log.Initialize(false)
+	defer log.Close()
+
+	instance := makeStartedInstance(t, "capture-precheck")
+	defer func() { _ = instance.Kill() }()
+
+	tp := NewDockerPane()
+	tp.SetSize(80, 30)
+
+	content, err := tp.CaptureForInstance(instance, 80, 30, 0)
+	require.NoError(t, err)
+	require.Contains(t, content, "Nenhum docker-compose encontrado",
+		"CaptureForInstance must return the precheck's fallback message as content, not an empty string")
+}
